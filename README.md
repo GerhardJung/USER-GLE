@@ -1,4 +1,4 @@
-# GLE-in-LAMMPS
+GLE-in-LAMMPS
 ==============
 
 contains various LAMMPS packages:

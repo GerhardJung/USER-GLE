@@ -629,6 +629,7 @@ void FixAveCorrelate::accumulate()
 	    }
 	  }
 	}
+	// reduce the results from each proc to calculate the global correlation
 	MPI_Allreduce(&peratom_extent, &peratom_extent, 1, MPI_INT, MPI_SUM, world);
 	MPI_Allreduce(local_accum, global_accum, nsample, MPI_DOUBLE, MPI_SUM, world);
 	for (k = 0; k < nsample; k++) {

@@ -637,7 +637,7 @@ void FixAveCorrelate::accumulate()
 	  corr[k][ipair]+= global_accum[k];
 	  local_accum[k] = global_accum[k] = 0;
 	}
-      }else{
+      }else{ //time correlation of global value (e.g. temperature)
 	for (k = 0; k < nsample; k++) {
 	  corr[k][ipair]+= scalar_values[m][indices[i]]*scalar_values[n][indices[i]];
 	  m--;

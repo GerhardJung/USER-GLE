@@ -613,11 +613,11 @@ void FixAveCorrelate::accumulate()
   int nlocal= atom->nlocal;
   int *mask= atom->mask;
 
-  if (type == AUTO) {
+  if (type == AUTO) { // calculate only self-correlation
     m = n = lastindex;
     ipair = 0;
     for (i = 0; i < nvalues; i++) {
-      if (peratom[i]) { //time correlation of peratom value (e.g. velocity)
+      if (peratom[i]) { // time correlation of peratom value (e.g. velocity)
 	int peratom_extent= 0;
 	for (j= 0; j < nlocal; j++) {
 	  if(mask[j] & groupbit) {
@@ -637,7 +637,7 @@ void FixAveCorrelate::accumulate()
 	  corr[k][ipair]+= global_accum[k];
 	  local_accum[k] = global_accum[k] = 0;
 	}
-      }else{ //time correlation of global value (e.g. temperature)
+      }else{ // time correlation of global value (e.g. temperature)
 	for (k = 0; k < nsample; k++) {
 	  corr[k][ipair]+= scalar_values[m][indices[i]]*scalar_values[n][indices[i]];
 	  m--;

@@ -3,8 +3,9 @@ GLE-in-LAMMPS
 Memory is all you need!
 --------------
 
-contains various LAMMPS packages:
+This repository contains various LAMMPS packages:
 
 - LJ-potential with offset
-- peratom time correlation functions
-- memory reconstruction
+- calculating peratom time correlation functions
+- reconstruction of memory kernels
+- GLE simulations

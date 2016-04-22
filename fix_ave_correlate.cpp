@@ -617,7 +617,7 @@ void FixAveCorrelate::accumulate()
     m = n = lastindex;
     ipair = 0;
     for (i = 0; i < nvalues; i++) {
-      if (peratom[i]) {
+      if (peratom[i]) { //time correlation of peratom value (e.g. velocity)
 	int peratom_extent= 0;
 	for (j= 0; j < nlocal; j++) {
 	  if(mask[j] & groupbit) {

@@ -20,7 +20,7 @@
 #include "stdlib.h"
 #include "string.h"
 #include "unistd.h"
-#include "fix_ave_correlate.h"
+#include "fix_ave_correlate_peratom.h"
 #include "update.h"
 #include "modify.h"
 #include "compute.h"
@@ -37,7 +37,7 @@ using namespace FixConst;
 
 enum{COMPUTE,FIX,VARIABLE};
 enum{ONE,RUNNING};
-enum{AUTO,UPPER,LOWER,AUTOUPPER,AUTOLOWER,FULL};
+enum{AUTO,AUTOCROSS};
 
 #define INVOKED_SCALAR 1
 #define INVOKED_VECTOR 2
@@ -46,7 +46,7 @@ enum{AUTO,UPPER,LOWER,AUTOUPPER,AUTOLOWER,FULL};
 
 /* ---------------------------------------------------------------------- */
 
-FixAveCorrelate::FixAveCorrelate(LAMMPS * lmp, int narg, char **arg):
+FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **arg):
   Fix (lmp, narg, arg)
 {
   if (narg < 7) error->all(FLERR,"Illegal fix ave/correlate command");
@@ -116,26 +116,6 @@ FixAveCorrelate::FixAveCorrelate(LAMMPS * lmp, int narg, char **arg):
     if (strcmp(arg[iarg],"type") == 0) {
       if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate command");
       if (strcmp(arg[iarg+1],"auto") == 0) type = AUTO;
-      else if (strcmp(arg[iarg+1],"upper") == 0) {
-	type = UPPER;
-	error->all(FLERR,"ave/correlate command with upper not yet implemented");
-      }
-      else if (strcmp(arg[iarg+1],"lower") == 0){
-	type = LOWER;
-	error->all(FLERR,"ave/correlate command with lower not yet implemented");
-      }
-      else if (strcmp(arg[iarg+1],"auto/upper") == 0){
-	type = AUTOUPPER;
-	error->all(FLERR,"ave/correlate command with auto/upper not yet implemented");
-      }
-      else if (strcmp(arg[iarg+1],"auto/lower") == 0){
-	type = AUTOLOWER;
-	error->all(FLERR,"ave/correlate command with auto/lower not yet implemented");
-      }
-      else if (strcmp(arg[iarg+1],"full") == 0){
-	type = FULL;
-	error->all(FLERR,"ave/correlate command with full not yet implemented");
-      }
       else if (strcmp(arg[iarg+1],"auto/cross") == 0){
 	type = AUTOCROSS;
       }
@@ -296,9 +276,6 @@ FixAveCorrelate::FixAveCorrelate(LAMMPS * lmp, int narg, char **arg):
   // npair = # of correlation pairs to calculate
 
   if (type == AUTO || type == AUTOCROSS) npair = nvalues;
-  if (type == UPPER || type == LOWER) npair = nvalues*(nvalues-1)/2;
-  if (type == AUTOUPPER || type == AUTOLOWER) npair = nvalues*(nvalues+1)/2;
-  if (type == FULL) npair = nvalues*nvalues;
 
   // print file comment lines
 
@@ -313,25 +290,9 @@ FixAveCorrelate::FixAveCorrelate(LAMMPS * lmp, int narg, char **arg):
       if (type == AUTO)
         for (int i = 0; i < nvalues; i++)
           fprintf(fp," %s*%s",arg[6+i],arg[6+i]);
-      else if (type == UPPER)
+      else if (type == AUTOCROSS) //TODO
         for (int i = 0; i < nvalues; i++)
           for (int j = i+1; j < nvalues; j++)
-            fprintf(fp," %s*%s",arg[6+i],arg[6+j]);
-      else if (type == LOWER)
-        for (int i = 0; i < nvalues; i++)
-          for (int j = 0; j <= i-1; j++)
-            fprintf(fp," %s*%s",arg[6+i],arg[6+j]);
-      else if (type == AUTOUPPER)
-        for (int i = 0; i < nvalues; i++)
-          for (int j = i; j < nvalues; j++)
-            fprintf(fp," %s*%s",arg[6+i],arg[6+j]);
-      else if (type == AUTOLOWER)
-        for (int i = 0; i < nvalues; i++)
-          for (int j = 0; j <= i; j++)
-            fprintf(fp," %s*%s",arg[6+i],arg[6+j]);
-      else if (type == FULL)
-        for (int i = 0; i < nvalues; i++)
-          for (int j = 0; j < nvalues; j++)
             fprintf(fp," %s*%s",arg[6+i],arg[6+j]);
       fprintf(fp,"\n");
     }
@@ -388,7 +349,7 @@ FixAveCorrelate::FixAveCorrelate(LAMMPS * lmp, int narg, char **arg):
 
 /* ---------------------------------------------------------------------- */
 
-FixAveCorrelate::~FixAveCorrelate()
+FixAveCorrelatePeratom::~FixAveCorrelatePeratom()
 {
   delete [] which;
   delete [] argindex;
@@ -412,7 +373,7 @@ FixAveCorrelate::~FixAveCorrelate()
 
 /* ---------------------------------------------------------------------- */
 
-int FixAveCorrelate::setmask()
+int FixAveCorrelatePeratom::setmask()
 {
   int mask = 0;
   mask |= END_OF_STEP;
@@ -421,7 +382,7 @@ int FixAveCorrelate::setmask()
 
 /* ---------------------------------------------------------------------- */
 
-void FixAveCorrelate::init()
+void FixAveCorrelatePeratom::init()
 {
   // set current indices for all computes,fixes,variables
 
@@ -461,14 +422,14 @@ void FixAveCorrelate::init()
    only does something if nvalid = current timestep
 ------------------------------------------------------------------------- */
 
-void FixAveCorrelate::setup(int vflag)
+void FixAveCorrelatePeratom::setup(int vflag)
 {
   end_of_step();
 }
 
 /* ---------------------------------------------------------------------- */
 
-void FixAveCorrelate::end_of_step()
+void FixAveCorrelatePeratom::end_of_step()
 {
   int i,j,m;
   double scalar;
@@ -622,7 +583,7 @@ void FixAveCorrelate::end_of_step()
    accumulate correlation data using more recently added values
 ------------------------------------------------------------------------- */
 
-void FixAveCorrelate::accumulate()
+void FixAveCorrelatePeratom::accumulate()
 {
   int i,j,k,m,n,ipair;
 
@@ -665,275 +626,14 @@ void FixAveCorrelate::accumulate()
       }
       ipair++;
     }
-  }/* else if (type == UPPER) {
-    m = n = lastindex;
-    for (k = 0; k < nsample; k++) {
-      ipair = 0;
-      for (i = 0; i < nvalues; i++)
-        for (j = i+1; j < nvalues; j++) {
-	  if(peratom[i] && peratom[j]) {
-	    double accum= 0.0;
-	    int peratom_extent= 0;
-	    for (int l= 0; l < nlocal; l++) {
-	      if(mask[l] & groupbit) {
-		accum+= array[l][indices[i] * nrepeat + m]*array[l][indices[j] * nrepeat + n];
-		peratom_extent++;
-	      }
-	    }
-	    MPI_Allreduce(&accum, &accum, 1, MPI_DOUBLE, MPI_SUM, world);
-	    MPI_Allreduce(&peratom_extent, &peratom_extent, 1, MPI_INT, MPI_SUM, world);
-	    accum/= peratom_extent;
-	    corr[k][ipair++]+= accum;
-	  } else if (peratom[i]) {
-	    double accum= 0.0;
-	    int peratom_extent= 0;
-	    for (int l= 0; l < nlocal; l++) {
-	      if(mask[l] & groupbit) {
-		accum+= array[l][indices[i] * nrepeat + m];
-		peratom_extent++;
-	      }
-	    }
-	    MPI_Allreduce(&accum, &accum, 1, MPI_DOUBLE, MPI_SUM, world);
-	    MPI_Allreduce(&peratom_extent, &peratom_extent, 1, MPI_INT, MPI_SUM, world);
-	    accum/= peratom_extent;
-	    corr[k][ipair++]+= accum*scalar_values[indices[j]][n];
-	  } else if (peratom[j]) {
-	    double accum= 0.0;
-	    int peratom_extent= 0;
-	    for (int l= 0; l < nlocal; l++) {
-	      if(mask[l] & groupbit) {
-		accum+= array[l][indices[j] * nrepeat + m];
-		peratom_extent++;
-	      }
-	    }
-	    MPI_Allreduce(&accum, &accum, 1, MPI_DOUBLE, MPI_SUM, world);
-	    MPI_Allreduce(&peratom_extent, &peratom_extent, 1, MPI_INT, MPI_SUM, world);
-	    accum/= peratom_extent;
-	    corr[k][ipair++]+= accum*scalar_values[indices[i]][n];
-	  } else {
-	    corr[k][ipair++]+= scalar_values[m][indices[i]]*scalar_values[n][indices[i]];
-	  }
-	}
-      m--;
-      if (m < 0) m = nrepeat-1;
-    }
-  } else if (type == LOWER) {
-    m = n = lastindex;
-    for (k = 0; k < nsample; k++) {
-      ipair = 0;
-      for (i = 0; i < nvalues; i++) {
-        for (j = 0; j <= i-1; j++) {
-	  if(peratom[i] && peratom[j]) {
-	    double accum= 0.0;
-	    int peratom_extent= 0;
-	    for (int l= 0; l < nlocal; l++) {
-	      if(mask[l] & groupbit) {
-		accum+= array[l][indices[i] * nrepeat + m]*array[l][indices[j] * nrepeat + n];
-		peratom_extent++;
-	      }
-	    }
-	    MPI_Allreduce(&accum, &accum, 1, MPI_DOUBLE, MPI_SUM, world);
-	    MPI_Allreduce(&peratom_extent, &peratom_extent, 1, MPI_INT, MPI_SUM, world);
-	    accum/= peratom_extent;
-	    corr[k][ipair++]+= accum;
-	  } else if (peratom[i]) {
-	    double accum= 0.0;
-	    int peratom_extent= 0;
-	    for (int l= 0; l < nlocal; l++) {
-	      if(mask[l] & groupbit) {
-		accum+= array[l][indices[i] * nrepeat + m];
-		peratom_extent++;
-	      }
-	    }
-	    MPI_Allreduce(&accum, &accum, 1, MPI_DOUBLE, MPI_SUM, world);
-	    MPI_Allreduce(&peratom_extent, &peratom_extent, 1, MPI_INT, MPI_SUM, world);
-	    accum/= peratom_extent;
-	    corr[k][ipair++]+= accum*scalar_values[indices[j]][n];
-	  } else if (peratom[j]) {
-	    double accum= 0.0;
-	    int peratom_extent= 0;
-	    for (int l= 0; l < nlocal; l++) {
-	      if(mask[l] & groupbit) {
-		accum+= array[l][indices[j] * nrepeat + m];
-		peratom_extent++;
-	      }
-	    }
-	    MPI_Allreduce(&accum, &accum, 1, MPI_DOUBLE, MPI_SUM, world);
-	    MPI_Allreduce(&peratom_extent, &peratom_extent, 1, MPI_INT, MPI_SUM, world);
-	    accum/= peratom_extent;
-	    corr[k][ipair++]+= accum*scalar_values[indices[i]][n];
-	  } else {
-	    corr[k][ipair++]+= scalar_values[m][indices[i]]*scalar_values[n][indices[i]];
-	  }
-	}
-      }
-      m--;
-      if (m < 0) m = nrepeat-1;
-    }
-  } else if (type == AUTOUPPER) {
-    m = n = lastindex;
-    for (k = 0; k < nsample; k++) {
-      ipair = 0;
-      for (i = 0; i < nvalues; i++)
-        for (j = i; j < nvalues; j++) {
-	  if(peratom[i] && peratom[j]) {
-	    double accum= 0.0;
-	    int peratom_extent= 0;
-	    for (int l= 0; l < nlocal; l++) {
-	      if(mask[l] & groupbit) {
-		accum+= array[l][indices[i] * nrepeat + m]*array[l][indices[j] * nrepeat + n];
-		peratom_extent++;
-	      }
-	    }
-	    MPI_Allreduce(&accum, &accum, 1, MPI_DOUBLE, MPI_SUM, world);
-	    MPI_Allreduce(&peratom_extent, &peratom_extent, 1, MPI_INT, MPI_SUM, world);
-	    accum/= peratom_extent;
-	    corr[k][ipair++]+= accum;
-	  } else if (peratom[i]) {
-	    double accum= 0.0;
-	    int peratom_extent= 0;
-	    for (int l= 0; l < nlocal; l++) {
-	      if(mask[l] & groupbit) {
-		accum+= array[l][indices[i] * nrepeat + m];
-		peratom_extent++;
-	      }
-	    }
-	    MPI_Allreduce(&accum, &accum, 1, MPI_DOUBLE, MPI_SUM, world);
-	    MPI_Allreduce(&peratom_extent, &peratom_extent, 1, MPI_INT, MPI_SUM, world);
-	    accum/= peratom_extent;
-	    corr[k][ipair++]+= accum*scalar_values[indices[j]][n];
-	  } else if (peratom[j]) {
-	    double accum= 0.0;
-	    int peratom_extent= 0;
-	    for (int l= 0; l < nlocal; l++) {
-	      if(mask[l] & groupbit) {
-		accum+= array[l][indices[j] * nrepeat + m];
-		peratom_extent++;
-	      }
-	    }
-	    MPI_Allreduce(&accum, &accum, 1, MPI_DOUBLE, MPI_SUM, world);
-	    MPI_Allreduce(&peratom_extent, &peratom_extent, 1, MPI_INT, MPI_SUM, world);
-	    accum/= peratom_extent;
-	    corr[k][ipair++]+= accum*scalar_values[indices[i]][n];
-	  } else {
-	    corr[k][ipair++]+= scalar_values[m][indices[i]]*scalar_values[n][indices[i]];
-	  }
-	}
-      m--;
-      if (m < 0) m = nrepeat-1;
-    }
-  } else if (type == AUTOLOWER) {
-    m = n = lastindex;
-    for (k = 0; k < nsample; k++) {
-      ipair = 0;
-      for (i = 0; i < nvalues; i++)
-        for (j = 0; j <= i; j++) {
-	  if(peratom[i] && peratom[j]) {
-	    double accum= 0.0;
-	    int peratom_extent= 0;
-	    for (int l= 0; l < nlocal; l++) {
-	      if(mask[l] & groupbit) {
-		accum+= array[l][indices[i] * nrepeat + m]*array[l][indices[j] * nrepeat + n];
-		peratom_extent++;
-	      }
-	    }
-	    MPI_Allreduce(&accum, &accum, 1, MPI_DOUBLE, MPI_SUM, world);
-	    MPI_Allreduce(&peratom_extent, &peratom_extent, 1, MPI_INT, MPI_SUM, world);
-	    accum/= peratom_extent;
-	    corr[k][ipair++]+= accum;
-	  } else if (peratom[i]) {
-	    double accum= 0.0;
-	    int peratom_extent= 0;
-	    for (int l= 0; l < nlocal; l++) {
-	      if(mask[l] & groupbit) {
-		accum+= array[l][indices[i] * nrepeat + m];
-		peratom_extent++;
-	      }
-	    }
-	    MPI_Allreduce(&accum, &accum, 1, MPI_DOUBLE, MPI_SUM, world);
-	    MPI_Allreduce(&peratom_extent, &peratom_extent, 1, MPI_INT, MPI_SUM, world);
-	    accum/= peratom_extent;
-	    corr[k][ipair++]+= accum*scalar_values[indices[j]][n];
-	  } else if (peratom[j]) {
-	    double accum= 0.0;
-	    int peratom_extent= 0;
-	    for (int l= 0; l < nlocal; l++) {
-	      if(mask[l] & groupbit) {
-		accum+= array[l][indices[j] * nrepeat + m];
-		peratom_extent++;
-	      }
-	    }
-	    MPI_Allreduce(&accum, &accum, 1, MPI_DOUBLE, MPI_SUM, world);
-	    MPI_Allreduce(&peratom_extent, &peratom_extent, 1, MPI_INT, MPI_SUM, world);
-	    accum/= peratom_extent;
-	    corr[k][ipair++]+= accum*scalar_values[indices[i]][n];
-	  } else {
-	    corr[k][ipair++]+= scalar_values[m][indices[i]]*scalar_values[n][indices[i]];
-	  }
-	 }
-      m--;
-      if (m < 0) m = nrepeat-1;
-    }
-  } else if (type == FULL) {
-    m = n = lastindex;
-    for (k = 0; k < nsample; k++) {
-      ipair = 0;
-      for (i = 0; i < nvalues; i++)
-        for (j = 0; j < nvalues; j++) {
-	  if(peratom[i] && peratom[j]) {
-	    double accum= 0.0;
-	    int peratom_extent= 0;
-	    for (int l= 0; l < nlocal; l++) {
-	      if(mask[l] & groupbit) {
-		accum+= array[l][indices[i] * nrepeat + m]*array[l][indices[j] * nrepeat + n];
-		peratom_extent++;
-	      }
-	    }
-	    MPI_Allreduce(&accum, &accum, 1, MPI_DOUBLE, MPI_SUM, world);
-	    MPI_Allreduce(&peratom_extent, &peratom_extent, 1, MPI_INT, MPI_SUM, world);
-	    accum/= peratom_extent;
-	    corr[k][ipair++]+= accum;
-	  } else if (peratom[i]) {
-	    double accum= 0.0;
-	    int peratom_extent= 0;
-	    for (int l= 0; l < nlocal; l++) {
-	      if(mask[l] & groupbit) {
-		accum+= array[l][indices[i] * nrepeat + m];
-		peratom_extent++;
-	      }
-	    }
-	    MPI_Allreduce(&accum, &accum, 1, MPI_DOUBLE, MPI_SUM, world);
-	    MPI_Allreduce(&peratom_extent, &peratom_extent, 1, MPI_INT, MPI_SUM, world);
-	    accum/= peratom_extent;
-	    corr[k][ipair++]+= accum*scalar_values[indices[j]][n];
-	  } else if (peratom[j]) {
-	    double accum= 0.0;
-	    int peratom_extent= 0;
-	    for (int l= 0; l < nlocal; l++) {
-	      if(mask[l] & groupbit) {
-		accum+= array[l][indices[j] * nrepeat + m];
-		peratom_extent++;
-	      }
-	    }
-	    MPI_Allreduce(&accum, &accum, 1, MPI_DOUBLE, MPI_SUM, world);
-	    MPI_Allreduce(&peratom_extent, &peratom_extent, 1, MPI_INT, MPI_SUM, world);
-	    accum/= peratom_extent;
-	    corr[k][ipair++]+= accum*scalar_values[indices[i]][n];
-	  } else {
-	    corr[k][ipair++]+= scalar_values[m][indices[i]]*scalar_values[n][indices[i]];
-	  }
-	}
-      m--;
-      if (m < 0) m = nrepeat-1;
-    }
-  }*/
+  }
 }
 
 /* ----------------------------------------------------------------------
    return I,J array value
 ------------------------------------------------------------------------- */
 
-double FixAveCorrelate::compute_array(int i, int j)
+double FixAveCorrelatePeratom::compute_array(int i, int j)
 {
   if (j == 0) return 1.0*i*nevery;
   else if (j == 1) return 1.0*save_count[i];
@@ -947,7 +647,7 @@ double FixAveCorrelate::compute_array(int i, int j)
    startstep is lower bound
 ------------------------------------------------------------------------- */
 
-bigint FixAveCorrelate::nextvalid()
+bigint FixAveCorrelatePeratom::nextvalid()
 {
   bigint nvalid = update->ntimestep;
   if (startstep > nvalid) nvalid = startstep;
@@ -957,14 +657,14 @@ bigint FixAveCorrelate::nextvalid()
 
 /* ---------------------------------------------------------------------- */
 
-void FixAveCorrelate::reset_timestep(bigint ntimestep)
+void FixAveCorrelatePeratom::reset_timestep(bigint ntimestep)
 {
   if (ntimestep > nvalid) error->all(FLERR,"Fix ave/correlate missed timestep");
 }
 
 /* --------------------------------------------------------------------- */
 
-int FixAveCorrelate::pack_exchange(int i, double* buf) {
+int FixAveCorrelatePeratom::pack_exchange(int i, double* buf) {
   int offset= 0;
   for (int m= 0; m < n_peratom; m++) {
     for (int k= 0; k < nsample; k++) {
@@ -980,7 +680,7 @@ int FixAveCorrelate::pack_exchange(int i, double* buf) {
 
 /* --------------------------------------------------------------------- */
 
-int FixAveCorrelate::unpack_exchange(int nlocal, double* buf) {
+int FixAveCorrelatePeratom::unpack_exchange(int nlocal, double* buf) {
   int offset= 0;
   for (int m= 0; m < n_peratom; m++) {
     for (int k= 0; k < nsample; k++) {
@@ -998,7 +698,7 @@ int FixAveCorrelate::unpack_exchange(int nlocal, double* buf) {
    memory usage of local atom-based array
 ------------------------------------------------------------------------- */
 
-double FixAveCorrelate::memory_usage() {
+double FixAveCorrelatePeratom::memory_usage() {
   double bytes;
   bytes = atom->nmax* n_peratom * nrepeat * sizeof(double);
   return bytes;
@@ -1008,7 +708,7 @@ double FixAveCorrelate::memory_usage() {
    allocate atom-based array
 ------------------------------------------------------------------------- */
 
-void FixAveCorrelate::grow_arrays(int nmax) {
+void FixAveCorrelatePeratom::grow_arrays(int nmax) {
   memory->grow(array,nmax,n_peratom*nrepeat,"fix_ave/correlate:array");
   array_atom = array;
   if (array) vector_atom = array[0];
@@ -1019,7 +719,7 @@ void FixAveCorrelate::grow_arrays(int nmax) {
    copy values within local atom-based array
 ------------------------------------------------------------------------- */
 
-void FixAveCorrelate::copy_arrays(int i, int j, int delflag) {
+void FixAveCorrelatePeratom::copy_arrays(int i, int j, int delflag) {
   int offset= 0;
   for (int m= 0; m < n_peratom; m++) {
     for (int k= 0; k < nsample; k++) {

@@ -13,7 +13,7 @@
 
 #ifdef FIX_CLASS
 
-FixStyle(ave/correlate,FixAveCorrelate)
+FixStyle(ave/correlate/peratom,FixAveCorrelatePeratom)
 
 #else
 
@@ -25,10 +25,10 @@ FixStyle(ave/correlate,FixAveCorrelate)
 
 namespace LAMMPS_NS {
 
-class FixAveCorrelate : public Fix {
+class FixAveCorrelatePeratom : public Fix {
  public:
-  FixAveCorrelate(class LAMMPS *, int, char **);
-  ~FixAveCorrelate();
+  FixAveCorrelatePeratom(class LAMMPS *, int, char **);
+  ~FixAveCorrelatePeratom();
   int setmask();
   void init();
   void setup(int);

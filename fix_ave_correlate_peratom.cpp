@@ -116,11 +116,29 @@ FixAveCorrelate::FixAveCorrelate(LAMMPS * lmp, int narg, char **arg):
     if (strcmp(arg[iarg],"type") == 0) {
       if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate command");
       if (strcmp(arg[iarg+1],"auto") == 0) type = AUTO;
-      else if (strcmp(arg[iarg+1],"upper") == 0) type = UPPER;
-      else if (strcmp(arg[iarg+1],"lower") == 0) type = LOWER;
-      else if (strcmp(arg[iarg+1],"auto/upper") == 0) type = AUTOUPPER;
-      else if (strcmp(arg[iarg+1],"auto/lower") == 0) type = AUTOLOWER;
-      else if (strcmp(arg[iarg+1],"full") == 0) type = FULL;
+      else if (strcmp(arg[iarg+1],"upper") == 0) {
+	type = UPPER;
+	error->all(FLERR,"ave/correlate command with upper not yet implemented");
+      }
+      else if (strcmp(arg[iarg+1],"lower") == 0){
+	type = LOWER;
+	error->all(FLERR,"ave/correlate command with lower not yet implemented");
+      }
+      else if (strcmp(arg[iarg+1],"auto/upper") == 0){
+	type = AUTOUPPER;
+	error->all(FLERR,"ave/correlate command with auto/upper not yet implemented");
+      }
+      else if (strcmp(arg[iarg+1],"auto/lower") == 0){
+	type = AUTOLOWER;
+	error->all(FLERR,"ave/correlate command with auto/lower not yet implemented");
+      }
+      else if (strcmp(arg[iarg+1],"full") == 0){
+	type = FULL;
+	error->all(FLERR,"ave/correlate command with full not yet implemented");
+      }
+      else if (strcmp(arg[iarg+1],"auto/cross") == 0){
+	type = AUTOCROSS;
+      }
       else error->all(FLERR,"Illegal fix ave/correlate command");
       iarg += 2;
     } else if (strcmp(arg[iarg],"ave") == 0) {
@@ -277,7 +295,7 @@ FixAveCorrelate::FixAveCorrelate(LAMMPS * lmp, int narg, char **arg):
 
   // npair = # of correlation pairs to calculate
 
-  if (type == AUTO) npair = nvalues;
+  if (type == AUTO || type == AUTOCROSS) npair = nvalues;
   if (type == UPPER || type == LOWER) npair = nvalues*(nvalues-1)/2;
   if (type == AUTOUPPER || type == AUTOLOWER) npair = nvalues*(nvalues+1)/2;
   if (type == FULL) npair = nvalues*nvalues;
@@ -647,7 +665,7 @@ void FixAveCorrelate::accumulate()
       }
       ipair++;
     }
-  } else if (type == UPPER) {
+  }/* else if (type == UPPER) {
     m = n = lastindex;
     for (k = 0; k < nsample; k++) {
       ipair = 0;
@@ -908,7 +926,7 @@ void FixAveCorrelate::accumulate()
       m--;
       if (m < 0) m = nrepeat-1;
     }
-  }
+  }*/
 }
 
 /* ----------------------------------------------------------------------

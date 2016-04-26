@@ -17,8 +17,8 @@ FixStyle(ave/correlate/peratom,FixAveCorrelatePeratom)
 
 #else
 
-#ifndef LMP_FIX_AVE_CORRELATE_H
-#define LMP_FIX_AVE_CORRELATE_H
+#ifndef LMP_FIX_AVE_CORRELATE_PERATOM_H
+#define LMP_FIX_AVE_CORRELATE_PERATOM_H
 
 #include "stdio.h"
 #include "fix.h"
@@ -45,8 +45,7 @@ class FixAveCorrelatePeratom : public Fix {
   int me,nvalues;
   int nrepeat,nfreq;
   bigint nvalid;
-  int *which,*argindex,*value2index, *peratom, *indices;
-  int n_peratom; //the number of peratom quantities
+  int *which,*argindex,*value2index;
   char **ids;
   FILE *fp;
   
@@ -54,6 +53,8 @@ class FixAveCorrelatePeratom : public Fix {
 
   int type,ave,startstep,overwrite;
   double prefactor;
+  int bin;
+  double range_lower,range_upper;
   char *title1,*title2,*title3;
   long filepos;
 
@@ -63,7 +64,7 @@ class FixAveCorrelatePeratom : public Fix {
 
   int npair;           // number of correlation pairs to calculate
   int *count;
-  double **scalar_values,**corr;
+  double **corr;
   double *local_accum;	//local array for every proc. Will be allreduced to gloabal_accum.
   double *global_accum;	//global array. Will be summed up in corr.
    

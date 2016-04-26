@@ -49,7 +49,7 @@ enum{AUTO,AUTOCROSS};
 FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **arg):
   Fix (lmp, narg, arg)
 {
-  if (narg < 7) error->all(FLERR,"Illegal fix ave/correlate command");
+  if (narg < 7) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
 
   MPI_Comm_rank(world,&me);
 
@@ -64,9 +64,6 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   argindex = new int[narg-6];
   ids = new char*[narg-6];
   value2index = new int[narg-6];
-  peratom = new int[narg-6]; //indicates which is a peratom quantity
-  indices= new int[narg-6]; //indicates where in array or scalar_values the data is
-  n_peratom= 0;
   nvalues = 0;
 
   int iarg = 6;
@@ -85,7 +82,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
       char *ptr = strchr(suffix,'[');
       if (ptr) {
         if (suffix[strlen(suffix)-1] != ']')
-          error->all(FLERR,"Illegal fix ave/correlate command");
+          error->all(FLERR,"Illegal fix ave/correlate/peratom command");
         argindex[nvalues] = atoi(ptr+1);
         *ptr = '\0';
       } else argindex[nvalues] = 0;
@@ -114,161 +111,130 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
 
   while (iarg < narg) {
     if (strcmp(arg[iarg],"type") == 0) {
-      if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate command");
+      if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       if (strcmp(arg[iarg+1],"auto") == 0) type = AUTO;
       else if (strcmp(arg[iarg+1],"auto/cross") == 0){
 	type = AUTOCROSS;
       }
-      else error->all(FLERR,"Illegal fix ave/correlate command");
+      else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       iarg += 2;
     } else if (strcmp(arg[iarg],"ave") == 0) {
-      if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate command");
+      if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       if (strcmp(arg[iarg+1],"one") == 0) ave = ONE;
       else if (strcmp(arg[iarg+1],"running") == 0) ave = RUNNING;
-      else error->all(FLERR,"Illegal fix ave/correlate command");
+      else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       iarg += 2;
     } else if (strcmp(arg[iarg],"start") == 0) {
-      if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate command");
+      if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       startstep = force->inumeric(FLERR,arg[iarg+1]);
       iarg += 2;
     } else if (strcmp(arg[iarg],"prefactor") == 0) {
-      if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate command");
+      if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       prefactor = force->numeric(FLERR,arg[iarg+1]);
       iarg += 2;
     } else if (strcmp(arg[iarg],"file") == 0) {
-      if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate command");
+      if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       if (me == 0) {
         fp = fopen(arg[iarg+1],"w");
         if (fp == NULL) {
           char str[128];
-          sprintf(str,"Cannot open fix ave/correlate file %s",arg[iarg+1]);
+          sprintf(str,"Cannot open fix ave/correlate/peratom file %s",arg[iarg+1]);
           error->one(FLERR,str);
         }
       }
+      iarg += 2;
+    } else if (strcmp(arg[iarg],"variable") == 0) {
+      if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
+      //TODO
       iarg += 2;
     } else if (strcmp(arg[iarg],"overwrite") == 0) {
       overwrite = 1;
       iarg += 1;
     } else if (strcmp(arg[iarg],"title1") == 0) {
-      if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate command");
+      if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       delete [] title1;
       int n = strlen(arg[iarg+1]) + 1;
       title1 = new char[n];
       strcpy(title1,arg[iarg+1]);
       iarg += 2;
     } else if (strcmp(arg[iarg],"title2") == 0) {
-      if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate command");
+      if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       delete [] title2;
       int n = strlen(arg[iarg+1]) + 1;
       title2 = new char[n];
       strcpy(title2,arg[iarg+1]);
       iarg += 2;
     } else if (strcmp(arg[iarg],"title3") == 0) {
-      if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate command");
+      if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       delete [] title3;
       int n = strlen(arg[iarg+1]) + 1;
       title3 = new char[n];
       strcpy(title3,arg[iarg+1]);
       iarg += 2;
-    } else error->all(FLERR,"Illegal fix ave/correlate command");
+    } else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
   }
 
   // setup and error check
   // for fix inputs, check that fix frequency is acceptable
 
   if (nevery <= 0 || nrepeat <= 0 || nfreq <= 0)
-    error->all(FLERR,"Illegal fix ave/correlate command");
+    error->all(FLERR,"Illegal fix ave/correlate/peratom command");
   if (nfreq % nevery)
-    error->all(FLERR,"Illegal fix ave/correlate command");
+    error->all(FLERR,"Illegal fix ave/correlate/peratom command");
   if (ave == ONE && nfreq < (nrepeat-1)*nevery)
-    error->all(FLERR,"Illegal fix ave/correlate command");
+    error->all(FLERR,"Illegal fix ave/correlate/peratom command");
   if (ave != RUNNING && overwrite)
-    error->all(FLERR,"Illegal fix ave/correlate command");
+    error->all(FLERR,"Illegal fix ave/correlate/peratom command");
   int n_scalar= 0;
   for (int i = 0; i < nvalues; i++) {
     if (which[i] == COMPUTE) {
       int icompute = modify->find_compute(ids[i]);
       //no such compute
       if (icompute < 0)
-        error->all(FLERR,"Compute ID for fix ave/correlate does not exist");
-
+        error->all(FLERR,"Compute ID for fix ave/correlate/peratom does not exist");
       if (argindex[i] == 0) { //allegedly a scalar
-	if (modify->compute[icompute]->peratom_flag == 1) {
-	  peratom[i]= 1;
-	  indices[i]= n_peratom++;
-	} else if (modify->compute[icompute]->scalar_flag == 1) {
-	  peratom[i]= 0;
-	  indices[i]= n_scalar++;
-	} else {
-	  error->all(FLERR, "Fix ave/correlate compute does not calculate either a global or peratom scalar");
+	if (modify->compute[icompute]->peratom_flag != 1) {
+	  error->all(FLERR, "Fix ave/correlate/peratom compute does not calculate a peratom scalar");
 	}
       } else {
 	if (modify->compute[icompute]->peratom_flag == 1) {
 	  if (argindex[i] > modify->compute[icompute]->size_peratom_cols) {
-	    error->all(FLERR,"Fix ave/correlate compute vector is accessed out-of-range");
+	    error->all(FLERR,"Fix ave/correlate/peratom compute vector is accessed out-of-range");
 	  }
-	  peratom[i]= 1;
-	  indices[i]= n_peratom++;
-	} else if (modify->compute[icompute]->vector_flag == 1) {
-	  if (argindex[i] > modify->compute[icompute]->size_vector) {
-	    error->all(FLERR,"Fix ave/correlate compute vector is accessed out-of-range");
-	  }
-	  peratom[i]= 0;
-	  indices[i]= n_scalar++;
 	} else {
-	  error->all(FLERR, "Fix ave/correlate compute does not calculate either a global or peratom vector");
+	  error->all(FLERR, "Fix ave/correlate/peratom compute does not calculate a peratom vector");
 	}
       }
     } else if (which[i] == FIX) {
       int ifix = modify->find_fix(ids[i]);
       if (ifix < 0)
-        error->all(FLERR,"Fix ID for fix ave/correlate does not exist");
+        error->all(FLERR,"Fix ID for fix ave/correlate/peratom does not exist");
       if (argindex[i] == 0) { //allegedly a scalar
-	if (modify->fix[ifix]->peratom_flag == 1) {
-	  peratom[i]= 1;
-	  indices[i]= n_peratom++;
-	} else if (modify->fix[ifix]->scalar_flag == 1) {
-	  peratom[i]= 0;
-	  indices[i]= n_scalar++;
-	} else {
-	  error->all(FLERR, "Fix ave/correlate fix does not calculate either a global or peratom scalar");
+	if (modify->fix[ifix]->peratom_flag != 1) {
+	  error->all(FLERR, "Fix ave/correlate/peratom fix does not calculate a peratom scalar");
 	}
       } else {
 	if (modify->fix[ifix]->peratom_flag == 1) {
 	  if (argindex[i] > modify->fix[ifix]->size_peratom_cols) {
-	    error->all(FLERR,"Fix ave/correlate fix vector is accessed out-of-range");
+	    error->all(FLERR,"Fix ave/correlate/peratom fix vector is accessed out-of-range");
 	  }
-	  peratom[i]= 1;
-	  indices[i]= n_peratom++;
-	} else if (modify->fix[ifix]->vector_flag == 1) {
-	  if (argindex[i] > modify->fix[ifix]->size_vector) {
-	    error->all(FLERR,"Fix ave/correlate fix vector is accessed out-of-range");
-	  }
-	  peratom[i]= 0;
-	  indices[i]= n_scalar++;
 	} else {
-	  error->all(FLERR, "Fix ave/correlate fix does not calculate either a global or peratom vector");
+	  error->all(FLERR, "Fix ave/correlate/peratom fix does not calculate a peratom vector");
 	}
       }
-      if (peratom[i] && nevery % modify->fix[ifix]->peratom_freq)
-	error->all(FLERR,"Fix for fix ave/correlate "
+      if (nevery % modify->fix[ifix]->peratom_freq)
+	error->all(FLERR,"Fix for fix ave/correlate/peratom "
                    "not computed at compatible time");
       else if (nevery % modify->fix[ifix]->global_freq)
-        error->all(FLERR,"Fix for fix ave/correlate "
+        error->all(FLERR,"Fix for fix ave/correlate/peratom "
                    "not computed at compatible time");
 
     } else if (which[i] == VARIABLE) {
       int ivariable = input->variable->find(ids[i]);
       if (ivariable < 0)
-        error->all(FLERR,"Variable name for fix ave/correlate does not exist");
-      if (input->variable->atomstyle(ivariable) == 1) {
-	peratom[i]= 1;
-	indices[i]= n_peratom++;
-      } else if (input->variable->equalstyle(ivariable) == 1) {
-	peratom[i]= 0;
-	indices[i]= n_scalar++;
-      } else {
-        error->all(FLERR, "Fix ave/correlate variable is not an equal- or atom-style variable");
+        error->all(FLERR,"Variable name for fix ave/correlate/peratom does not exist");
+      if (input->variable->atomstyle(ivariable) != 1) {
+        error->all(FLERR, "Fix ave/correlate/peratom variable is not an equal- or atom-style variable");
       }
     }
   }
@@ -307,13 +273,12 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   // set count and corr to zero since they accumulate
   // also set save versions to zero in case accessed via compute_array()
 
-  memory->create(scalar_values, nrepeat, nvalues-n_peratom, "ave/correlate:values");
-  memory->create(count,nrepeat,"ave/correlate:count");
-  memory->create(save_count,nrepeat,"ave/correlate:save_count");
-  memory->create(corr,nrepeat,npair,"ave/correlate:corr");
-  memory->create(local_accum,nrepeat,"ave/correlate:local_accum");
-  memory->create(global_accum,nrepeat,"ave/correlate:global_accum");
-  memory->create(save_corr,nrepeat,npair,"ave/correlate:save_corr");
+  memory->create(count,nrepeat,"ave/correlate/peratom:count");
+  memory->create(save_count,nrepeat,"ave/correlate/peratom:save_count");
+  memory->create(corr,nrepeat,npair,"ave/correlate/peratom:corr");
+  memory->create(local_accum,nrepeat,"ave/correlate/peratom:local_accum");
+  memory->create(global_accum,nrepeat,"ave/correlate/peratom:global_accum");
+  memory->create(save_corr,nrepeat,npair,"ave/correlate/peratom:save_corr");
 
   int i,j;
   for (i = 0; i < nrepeat; i++) {
@@ -341,7 +306,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   modify->addstep_compute_all(nvalid);
   
   array= NULL;
-  if(n_peratom > 0) {
+  if(nvalues > 0) {
     grow_arrays(atom->nmax);
     atom->add_callback(0);
   }
@@ -354,12 +319,9 @@ FixAveCorrelatePeratom::~FixAveCorrelatePeratom()
   delete [] which;
   delete [] argindex;
   delete [] value2index;
-  delete [] peratom;
-  delete [] indices;
   for (int i = 0; i < nvalues; i++) delete [] ids[i];
   delete [] ids;
 
-  memory->destroy(scalar_values);
   memory->destroy(array);
   memory->destroy(count);
   memory->destroy(save_count);
@@ -369,6 +331,7 @@ FixAveCorrelatePeratom::~FixAveCorrelatePeratom()
   memory->destroy(save_corr);
   
   if (fp && me == 0) fclose(fp);
+  
 }
 
 /* ---------------------------------------------------------------------- */
@@ -390,19 +353,19 @@ void FixAveCorrelatePeratom::init()
     if (which[i] == COMPUTE) {
       int icompute = modify->find_compute(ids[i]);
       if (icompute < 0)
-        error->all(FLERR,"Compute ID for fix ave/correlate does not exist");
+        error->all(FLERR,"Compute ID for fix ave/correlate/peratom does not exist");
       value2index[i] = icompute;
 
     } else if (which[i] == FIX) {
       int ifix = modify->find_fix(ids[i]);
       if (ifix < 0)
-        error->all(FLERR,"Fix ID for fix ave/correlate does not exist");
+        error->all(FLERR,"Fix ID for fix ave/correlate/peratom does not exist");
       value2index[i] = ifix;
 
     } else if (which[i] == VARIABLE) {
       int ivariable = input->variable->find(ids[i]);
       if (ivariable < 0)
-        error->all(FLERR,"Variable name for fix ave/correlate does not exist");
+        error->all(FLERR,"Variable name for fix ave/correlate/peratom does not exist");
       value2index[i] = ivariable;
     }
   }
@@ -458,61 +421,38 @@ void FixAveCorrelatePeratom::end_of_step()
     if (which[i] == COMPUTE) {
       Compute *compute = modify->compute[m];
 
-      if (peratom[i]) {
-	if(!(compute->invoked_flag & INVOKED_PERATOM)) {
-	  compute->compute_peratom();
-	  compute->invoked_flag |= INVOKED_PERATOM;
-	}
-	if (argindex[i] == 0) {
-	  peratom_data= compute->vector_atom;
-	} else {
-	  peratom_data= compute->array_atom[argindex[i]-1];
-	}
-      } else if (argindex[i] == 0) {
-        if (!(compute->invoked_flag & INVOKED_SCALAR)) {
-          compute->compute_scalar();
-          compute->invoked_flag |= INVOKED_SCALAR;
-        }
-        scalar = compute->scalar;
+      if(!(compute->invoked_flag & INVOKED_PERATOM)) {
+	compute->compute_peratom();
+	compute->invoked_flag |= INVOKED_PERATOM;
+      }
+      if (argindex[i] == 0) {
+	peratom_data= compute->vector_atom;
       } else {
-        if (!(compute->invoked_flag & INVOKED_VECTOR)) {
-          compute->compute_vector();
-          compute->invoked_flag |= INVOKED_VECTOR;
-        }
-        scalar = compute->vector[argindex[i]-1];
+	peratom_data= compute->array_atom[argindex[i]-1];
       }
 
     // access fix fields, guaranteed to be ready
     } else if (which[i] == FIX) {
-      if (peratom[i] && argindex[i] == 0) 
+      if (argindex[i] == 0) 
 	peratom_data= modify->fix[m]->vector_atom;
-      else if(peratom[i] && argindex[i] > 0)
-	peratom_data= modify->fix[m]->array_atom[i-1];
-      else if (argindex[i] == 0)
-        scalar = modify->fix[m]->compute_scalar();
       else
-        scalar = modify->fix[m]->compute_vector(argindex[i]-1);
+	peratom_data= modify->fix[m]->array_atom[i-1];
 
     // evaluate equal-style variable
-    } else if (which[i] == VARIABLE && peratom[i]) {
-      memory->create(peratom_data, atom->nlocal, "ave/correlation:peratom_data");
-      input->variable->compute_atom(m, igroup, peratom_data, 1, 0);
-    } else
-      scalar = input->variable->compute_equal(m);
-    
-    
-    if (!peratom[i]) {
-      scalar_values[lastindex][indices[i]] = scalar;
     } else {
-      int offset= indices[i]*nrepeat + lastindex;
-      for(int j= 0; j < atom->nlocal; j++) {
-	array[j][offset]= peratom_data[j];
-      }
-      //if this was done by an atom-style variable, we need to free the mem we allocated
-      if (which[i] == VARIABLE && peratom[i]) {
-	memory->destroy(peratom_data);
-      }
+      memory->create(peratom_data, atom->nlocal, "ave/correlation/peratom:peratom_data");
+      input->variable->compute_atom(m, igroup, peratom_data, 1, 0);
     }
+    
+   
+    int offset= i*nrepeat + lastindex;
+    for(int j= 0; j < atom->nlocal; j++) {
+      array[j][offset]= peratom_data[j];
+    }
+    //if this was done by an atom-style variable, we need to free the mem we allocated
+    if (which[i] == VARIABLE) {
+      memory->destroy(peratom_data);
+     }
   }
 
   // fistindex = index in values ring of earliest time sample
@@ -585,48 +525,56 @@ void FixAveCorrelatePeratom::end_of_step()
 
 void FixAveCorrelatePeratom::accumulate()
 {
-  int i,j,k,m,n,ipair;
-
+  int i,j,k,m,n,ipair,ngroup=0;
+  int *indices_group;
+  memory->grow(indices_group,ngroup,"ave/correlate/peratomindices_group");
   for (k = 0; k < nsample; k++) count[k]++;
   
   int nlocal= atom->nlocal;
   int *mask= atom->mask;
+  
+  // find group-member on each processor
+  for (j= 0; j < nlocal; j++) {
+    if(mask[j] & groupbit) {
+      ngroup++;
+      memory->grow(indices_group,ngroup,"ave/correlate/peratomindices_group");
+      indices_group[ngroup-1]=j;
+      //printf("proc: %d ngroup: %d\n",me,ngroup);
+    }
+  }
 
-  if (type == AUTO) { // calculate only self-correlation
+  if (type == AUTO) { // type = auto -> calculate only self-correlation
     m = n = lastindex;
     ipair = 0;
     for (i = 0; i < nvalues; i++) {
-      if (peratom[i]) { // time correlation of peratom value (e.g. velocity)
-	int peratom_extent= 0;
-	for (j= 0; j < nlocal; j++) {
-	  if(mask[j] & groupbit) {
-	    peratom_extent++;
-	    for (k = 0; k < nsample; k++) {
-	      local_accum[k]+= array[j][indices[i] * nrepeat + m]*array[j][indices[i] * nrepeat + n];
-	      m--;
-	      if (m < 0) m = nrepeat-1;
-	    }
+      int peratom_extent= 0;
+      for (j= 0; j < nlocal; j++) {
+	if(mask[j] & groupbit) {
+	  peratom_extent++;
+	  for (k = 0; k < nsample; k++) {
+	    local_accum[k]+= array[j][i * nrepeat + m]*array[j][i * nrepeat + n];
+	    m--;
+	    if (m < 0) m = nrepeat-1;
 	  }
 	}
-	// reduce the results from each proc to calculate the global correlation
-	MPI_Allreduce(&peratom_extent, &peratom_extent, 1, MPI_INT, MPI_SUM, world);
-	MPI_Allreduce(local_accum, global_accum, nsample, MPI_DOUBLE, MPI_SUM, world);
-	for (k = 0; k < nsample; k++) {
-	  global_accum[k]/= peratom_extent;
-	  corr[k][ipair]+= global_accum[k];
-	  local_accum[k] = global_accum[k] = 0;
-	}
-      }else{ // time correlation of global value (e.g. temperature)
-	for (k = 0; k < nsample; k++) {
-	  corr[k][ipair]+= scalar_values[m][indices[i]]*scalar_values[n][indices[i]];
-	  m--;
-	  if (m < 0) m = nrepeat-1;
-	}
-	
+      }
+      // reduce the results from each proc to calculate the global correlation
+      MPI_Allreduce(&peratom_extent, &peratom_extent, 1, MPI_INT, MPI_SUM, world);
+      MPI_Allreduce(local_accum, global_accum, nsample, MPI_DOUBLE, MPI_SUM, world);
+      for (k = 0; k < nsample; k++) {
+	global_accum[k]/= peratom_extent;
+	corr[k][ipair]+= global_accum[k];
+	local_accum[k] = global_accum[k] = 0;
       }
       ipair++;
     }
+  } else { // type = auto/cross -> calculate cross correlations between particles
+    
+    //TODO
+    
   }
+  
+  memory->destroy(indices_group);
 }
 
 /* ----------------------------------------------------------------------
@@ -659,14 +607,14 @@ bigint FixAveCorrelatePeratom::nextvalid()
 
 void FixAveCorrelatePeratom::reset_timestep(bigint ntimestep)
 {
-  if (ntimestep > nvalid) error->all(FLERR,"Fix ave/correlate missed timestep");
+  if (ntimestep > nvalid) error->all(FLERR,"Fix ave/correlate/peratom missed timestep");
 }
 
 /* --------------------------------------------------------------------- */
 
 int FixAveCorrelatePeratom::pack_exchange(int i, double* buf) {
   int offset= 0;
-  for (int m= 0; m < n_peratom; m++) {
+  for (int m= 0; m < nvalues; m++) {
     for (int k= 0; k < nsample; k++) {
       buf[offset] = array[i][offset];
       offset++;
@@ -682,7 +630,7 @@ int FixAveCorrelatePeratom::pack_exchange(int i, double* buf) {
 
 int FixAveCorrelatePeratom::unpack_exchange(int nlocal, double* buf) {
   int offset= 0;
-  for (int m= 0; m < n_peratom; m++) {
+  for (int m= 0; m < nvalues; m++) {
     for (int k= 0; k < nsample; k++) {
       array[nlocal][offset]= buf[offset];
       offset++;
@@ -700,7 +648,7 @@ int FixAveCorrelatePeratom::unpack_exchange(int nlocal, double* buf) {
 
 double FixAveCorrelatePeratom::memory_usage() {
   double bytes;
-  bytes = atom->nmax* n_peratom * nrepeat * sizeof(double);
+  bytes = atom->nmax* nvalues * nrepeat * sizeof(double);
   return bytes;
 }
 
@@ -709,7 +657,7 @@ double FixAveCorrelatePeratom::memory_usage() {
 ------------------------------------------------------------------------- */
 
 void FixAveCorrelatePeratom::grow_arrays(int nmax) {
-  memory->grow(array,nmax,n_peratom*nrepeat,"fix_ave/correlate:array");
+  memory->grow(array,nmax,nvalues*nrepeat,"fix_ave/correlate/peratom:array");
   array_atom = array;
   if (array) vector_atom = array[0];
   else vector_atom = NULL;
@@ -721,7 +669,7 @@ void FixAveCorrelatePeratom::grow_arrays(int nmax) {
 
 void FixAveCorrelatePeratom::copy_arrays(int i, int j, int delflag) {
   int offset= 0;
-  for (int m= 0; m < n_peratom; m++) {
+  for (int m= 0; m < nvalues; m++) {
     for (int k= 0; k < nsample; k++) {
       array[j][offset] = array[i][offset];
       offset++;

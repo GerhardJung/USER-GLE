@@ -527,44 +527,40 @@ void FixAveCorrelatePeratom::end_of_step()
 
 void FixAveCorrelatePeratom::accumulate()
 {
-  int i,j,k,m,n,ipair,ngroup=0;
+  int i,j,k,m,n,ipair,ngroup_loc=0,ngroup_tot=0;
   int *indices_group;
-  memory->grow(indices_group,ngroup,"ave/correlate/peratomindices_group");
+  memory->grow(indices_group,ngroup_loc,"ave/correlate/peratomindices_group");
   for (k = 0; k < nsample; k++) count[k]++;
   
   int nlocal= atom->nlocal;
   int *mask= atom->mask;
   
   // find group-member on each processor
-  /*for (j= 0; j < nlocal; j++) {
+  for (j= 0; j < nlocal; j++) {
     if(mask[j] & groupbit) {
-      ngroup++;
-      memory->grow(indices_group,ngroup,"ave/correlate/peratomindices_group");
-      indices_group[ngroup-1]=j;
+      ngroup_loc++;
+      memory->grow(indices_group,ngroup_loc,"ave/correlate/peratomindices_group");
+      indices_group[ngroup_loc-1]=j;
       //printf("proc: %d ngroup: %d\n",me,ngroup);
     }
-  }*/
+  }
+  MPI_Allreduce(&ngroup_loc, &ngroup_tot, 1, MPI_INT, MPI_SUM, world);
 
   if (type == AUTO) { // type = auto -> calculate only self-correlation
     m = n = lastindex;
     ipair = 0;
     for (i = 0; i < nvalues; i++) {
-      int peratom_extent= 0;
-      for (j= 0; j < nlocal; j++) {
-	if(mask[j] & groupbit) {
-	  peratom_extent++;
-	  for (k = 0; k < nsample; k++) {
-	    local_accum[k]+= array[j][i * nrepeat + m]*array[j][i * nrepeat + n];
-	    m--;
-	    if (m < 0) m = nrepeat-1;
-	  }
+      for (j= 0; j < ngroup_loc; j++) {
+	for (k = 0; k < nsample; k++) {
+	  local_accum[k]+= array[indices_group[j]][i * nrepeat + m]*array[indices_group[j]][i * nrepeat + n];
+	  m--;
+	  if (m < 0) m = nrepeat-1;
 	}
       }
       // reduce the results from each proc to calculate the global correlation
-      MPI_Allreduce(&peratom_extent, &peratom_extent, 1, MPI_INT, MPI_SUM, world);
       MPI_Allreduce(local_accum, global_accum, nsample, MPI_DOUBLE, MPI_SUM, world);
       for (k = 0; k < nsample; k++) {
-	global_accum[k]/= peratom_extent;
+	global_accum[k]/= ngroup_tot;
 	corr[k][ipair]+= global_accum[k];
 	local_accum[k] = global_accum[k] = 0;
       }

@@ -308,6 +308,8 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   array= NULL;
   if(nvalues > 0) {
     grow_arrays(atom->nmax);
+    // need to grow array size
+    comm->maxexchange_fix = MAX(comm->maxexchange_fix,nvalues*nrepeat);
     atom->add_callback(0);
   }
 }
@@ -534,14 +536,14 @@ void FixAveCorrelatePeratom::accumulate()
   int *mask= atom->mask;
   
   // find group-member on each processor
-  for (j= 0; j < nlocal; j++) {
+  /*for (j= 0; j < nlocal; j++) {
     if(mask[j] & groupbit) {
       ngroup++;
       memory->grow(indices_group,ngroup,"ave/correlate/peratomindices_group");
       indices_group[ngroup-1]=j;
       //printf("proc: %d ngroup: %d\n",me,ngroup);
     }
-  }
+  }*/
 
   if (type == AUTO) { // type = auto -> calculate only self-correlation
     m = n = lastindex;

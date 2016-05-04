@@ -19,7 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "pair_lj_off.h"
+#include "pair_harmonic.h"
 #include "atom.h"
 #include "comm.h"
 #include "force.h"
@@ -37,14 +37,14 @@ using namespace MathConst;
 
 /* ---------------------------------------------------------------------- */
 
-PairLJOff::PairLJOff(LAMMPS *lmp) : Pair(lmp)
+PairHarmonic::PairHarmonic(LAMMPS *lmp) : Pair(lmp)
 {
   writedata = 1;
 }
 
 /* ---------------------------------------------------------------------- */
 
-PairLJOff::~PairLJOff()
+PairHarmonic::~PairHarmonic()
 {
   if (allocated) {
     memory->destroy(setflag);
@@ -52,23 +52,18 @@ PairLJOff::~PairLJOff()
 
     memory->destroy(cut);
     memory->destroy(epsilon);
-    memory->destroy(sigma);
-    memory->destroy(r_offset);
-    memory->destroy(lj1);
-    memory->destroy(lj2);
-    memory->destroy(lj3);
-    memory->destroy(lj4);
-    memory->destroy(offset);
+    memory->destroy(harmonic1);
+    memory->destroy(harmonic2);
   }
 }
 
 /* ---------------------------------------------------------------------- */
 
-void PairLJOff::compute(int eflag, int vflag)
+void PairHarmonic::compute(int eflag, int vflag)
 {
   int i,j,ii,jj,inum,jnum,itype,jtype;
-  double xtmp,ytmp,ztmp,delx,dely,delz,evdwl,fpair;
-  double rsq,r,rinv,rinv_norm,r2inv,r6inv,forcelj,factor_lj;
+  double xtmp,ytmp,ztmp,delx,dely,delz,evdwl;
+  double rsq;
   int *ilist,*jlist,*numneigh,**firstneigh;
 
   evdwl = 0.0;
@@ -79,7 +74,6 @@ void PairLJOff::compute(int eflag, int vflag)
   double **f = atom->f;
   int *type = atom->type;
   int nlocal = atom->nlocal;
-  double *special_lj = force->special_lj;
   int newton_pair = force->newton_pair;
 
   inum = list->inum;
@@ -100,7 +94,6 @@ void PairLJOff::compute(int eflag, int vflag)
 
     for (jj = 0; jj < jnum; jj++) {
       j = jlist[jj];
-      factor_lj = special_lj[sbmask(j)];
       j &= NEIGHMASK;
 
       delx = xtmp - x[j][0];
@@ -110,37 +103,25 @@ void PairLJOff::compute(int eflag, int vflag)
       jtype = type[j];
 
       if (rsq < cutsq[itype][jtype]) {
-	r = sqrt(rsq);
-	
+	//printf("test_force %f %f %f\n",delx*harmonic1[itype][jtype],dely*harmonic1[itype][jtype],delz*harmonic1[itype][jtype]);
+        f[i][0] += delx*harmonic1[itype][jtype];
+        f[i][1] += dely*harmonic1[itype][jtype];
+        f[i][2] += delz*harmonic1[itype][jtype];
 
-	
-	rinv_norm = 1.0/r;
-	rinv = 1.0/(r-r_offset[itype][jtype]);
-        r2inv = rinv*rinv;
-        r6inv = r2inv*r2inv*r2inv;
-        forcelj = r6inv * (lj1[itype][jtype]*r6inv - lj2[itype][jtype]);
-        fpair = factor_lj*forcelj*rinv*rinv_norm;
-//	printf("dist = %f, eff.dist = %f, fpair = %f\n",r,r-r_offset[itype][jtype],fpair);
-        f[i][0] += delx*fpair;
-        f[i][1] += dely*fpair;
-        f[i][2] += delz*fpair;
-//	if ( r < 1.1001 + r_offset[itype][jtype] && r > 1.1000 + r_offset[itype][jtype] ) {
-//	  printf("dist = %f, f^2 = %f\n",r,delx*fpair*delx*fpair+dely*fpair*dely*fpair+delz*fpair*delz*fpair);
-//	}  
         if (newton_pair || j < nlocal) {
-          f[j][0] -= delx*fpair;
-          f[j][1] -= dely*fpair;
-          f[j][2] -= delz*fpair;
+          f[j][0] -= delx*harmonic1[itype][jtype];
+          f[j][1] -= dely*harmonic1[itype][jtype];
+          f[j][2] -= delz*harmonic1[itype][jtype];
         }
 
         if (eflag) {
-          evdwl = r6inv*(lj3[itype][jtype]*r6inv-lj4[itype][jtype]) -
-            offset[itype][jtype];
-          evdwl *= factor_lj;
+          evdwl = 1-rsq*harmonic2[itype][jtype];
+          evdwl *= epsilon[itype][jtype];
+	  //printf("test_energy %f %f %f %f\n",rsq, evdwl, epsilon[itype][jtype],harmonic2[itype][jtype]);
         }
 
         if (evflag) ev_tally(i,j,nlocal,newton_pair,
-                             evdwl,0.0,fpair,delx,dely,delz);
+                             evdwl,0.0,harmonic1[itype][jtype],delx,dely,delz);
       }
     }
   }
@@ -152,7 +133,7 @@ void PairLJOff::compute(int eflag, int vflag)
    allocate all arrays
 ------------------------------------------------------------------------- */
 
-void PairLJOff::allocate()
+void PairHarmonic::allocate()
 {
   allocated = 1;
   int n = atom->ntypes;
@@ -166,20 +147,15 @@ void PairLJOff::allocate()
 
   memory->create(cut,n+1,n+1,"pair:cut");
   memory->create(epsilon,n+1,n+1,"pair:epsilon");
-  memory->create(sigma,n+1,n+1,"pair:sigma");
-  memory->create(r_offset,n+1,n+1,"pair:r_offset");
-  memory->create(lj1,n+1,n+1,"pair:lj1");
-  memory->create(lj2,n+1,n+1,"pair:lj2");
-  memory->create(lj3,n+1,n+1,"pair:lj3");
-  memory->create(lj4,n+1,n+1,"pair:lj4");
-  memory->create(offset,n+1,n+1,"pair:offset");
+  memory->create(harmonic1,n+1,n+1,"pair:harmonic1");
+  memory->create(harmonic2,n+1,n+1,"pair:harmonic2");
 }
 
 /* ----------------------------------------------------------------------
    global settings
 ------------------------------------------------------------------------- */
 
-void PairLJOff::settings(int narg, char **arg)
+void PairHarmonic::settings(int narg, char **arg)
 {
   if (narg != 1) error->all(FLERR,"Illegal pair_style command");
 
@@ -199,30 +175,26 @@ void PairLJOff::settings(int narg, char **arg)
    set coeffs for one or more type pairs
 ------------------------------------------------------------------------- */
 
-void PairLJOff::coeff(int narg, char **arg)
+void PairHarmonic::coeff(int narg, char **arg)
 {
-  if (narg < 5 || narg > 6)
+  if (narg < 3 || narg > 4)
     error->all(FLERR,"Incorrect args for pair coefficients");
   if (!allocated) allocate();
 
   int ilo,ihi,jlo,jhi;
   force->bounds(arg[0],atom->ntypes,ilo,ihi);
   force->bounds(arg[1],atom->ntypes,jlo,jhi);
-
+  
   double epsilon_one = force->numeric(FLERR,arg[2]);
-  double sigma_one = force->numeric(FLERR,arg[3]);
-  double r_offset_one = force->numeric(FLERR,arg[4]);
 
   double cut_one = cut_global;
-  if (narg == 6) cut_one = force->numeric(FLERR,arg[5]);
+  if (narg == 4) cut_one = force->numeric(FLERR,arg[3]);
 
   int count = 0;
   for (int i = ilo; i <= ihi; i++) {
     for (int j = MAX(jlo,i); j <= jhi; j++) {
-      epsilon[i][j] = epsilon_one;
-      sigma[i][j] = sigma_one;
-      r_offset[i][j] = r_offset_one;
       cut[i][j] = cut_one;
+      epsilon[i][j] = epsilon_one;
       setflag[i][j] = 1;
       count++;
     }
@@ -236,32 +208,20 @@ void PairLJOff::coeff(int narg, char **arg)
    init for one type pair i,j and corresponding j,i
 ------------------------------------------------------------------------- */
 
-double PairLJOff::init_one(int i, int j)
+double PairHarmonic::init_one(int i, int j)
 {
   if (setflag[i][j] == 0) {
-    epsilon[i][j] = mix_energy(epsilon[i][i],epsilon[j][j],
-                               sigma[i][i],sigma[j][j]);
-    sigma[i][j] = mix_distance(sigma[i][i],sigma[j][j]);
+    epsilon[i][j] = mix_energy(epsilon[i][i],epsilon[j][j],1.0,1.0);
+    printf("%d %d %f\n",i,j,epsilon[i][j]);
     cut[i][j] = mix_distance(cut[i][i],cut[j][j]);
-    r_offset[i][j] = mix_distance(r_offset[i][i],r_offset[j][j]);
   }
 
-  lj1[i][j] = 48.0 * epsilon[i][j] * pow(sigma[i][j],12.0);
-  lj2[i][j] = 24.0 * epsilon[i][j] * pow(sigma[i][j],6.0);
-  lj3[i][j] = 4.0 * epsilon[i][j] * pow(sigma[i][j],12.0);
-  lj4[i][j] = 4.0 * epsilon[i][j] * pow(sigma[i][j],6.0);
+  harmonic1[i][j] = - 2.0/cut[i][j]/cut[i][j]*epsilon[i][j];
+  harmonic2[i][j] = 1.0/cut[i][j]/cut[i][j];
 
-  if (offset_flag) {
-    double ratio = sigma[i][j] / (cut[i][j]-r_offset[i][j]);
-    offset[i][j] = 4.0 * epsilon[i][j] * (pow(ratio,12.0) - pow(ratio,6.0));
-  } else offset[i][j] = 0.0;
-
-  lj1[j][i] = lj1[i][j];
-  lj2[j][i] = lj2[i][j];
-  lj3[j][i] = lj3[i][j];
-  lj4[j][i] = lj4[i][j];
-  r_offset[j][i] = r_offset[i][j];
-  offset[j][i] = offset[i][j];
+  epsilon[j][i] = epsilon[i][j];
+  harmonic1[j][i] = harmonic1[i][j];
+  harmonic2[j][i] = harmonic2[i][j];
 
   return cut[i][j];
 }
@@ -270,7 +230,7 @@ double PairLJOff::init_one(int i, int j)
    proc 0 writes to restart file
 ------------------------------------------------------------------------- */
 
-void PairLJOff::write_restart(FILE *fp)
+void PairHarmonic::write_restart(FILE *fp)
 {
   write_restart_settings(fp);
 
@@ -280,8 +240,6 @@ void PairLJOff::write_restart(FILE *fp)
       fwrite(&setflag[i][j],sizeof(int),1,fp);
       if (setflag[i][j]) {
         fwrite(&epsilon[i][j],sizeof(double),1,fp);
-        fwrite(&sigma[i][j],sizeof(double),1,fp);
-	fwrite(&r_offset[i][j],sizeof(double),1,fp);
         fwrite(&cut[i][j],sizeof(double),1,fp);
       }
     }
@@ -291,7 +249,7 @@ void PairLJOff::write_restart(FILE *fp)
    proc 0 reads from restart file, bcasts
 ------------------------------------------------------------------------- */
 
-void PairLJOff::read_restart(FILE *fp)
+void PairHarmonic::read_restart(FILE *fp)
 {
   read_restart_settings(fp);
   allocate();
@@ -305,13 +263,9 @@ void PairLJOff::read_restart(FILE *fp)
       if (setflag[i][j]) {
         if (me == 0) {
           fread(&epsilon[i][j],sizeof(double),1,fp);
-          fread(&sigma[i][j],sizeof(double),1,fp);
-	  fread(&r_offset[i][j],sizeof(double),1,fp);
           fread(&cut[i][j],sizeof(double),1,fp);
         }
         MPI_Bcast(&epsilon[i][j],1,MPI_DOUBLE,0,world);
-        MPI_Bcast(&sigma[i][j],1,MPI_DOUBLE,0,world);
-	MPI_Bcast(&r_offset[i][j],1,MPI_DOUBLE,0,world);
         MPI_Bcast(&cut[i][j],1,MPI_DOUBLE,0,world);
       }
     }
@@ -321,10 +275,9 @@ void PairLJOff::read_restart(FILE *fp)
    proc 0 writes to restart file
 ------------------------------------------------------------------------- */
 
-void PairLJOff::write_restart_settings(FILE *fp)
+void PairHarmonic::write_restart_settings(FILE *fp)
 {
   fwrite(&cut_global,sizeof(double),1,fp);
-  fwrite(&offset_flag,sizeof(int),1,fp);
   fwrite(&mix_flag,sizeof(int),1,fp);
 }
 
@@ -332,16 +285,14 @@ void PairLJOff::write_restart_settings(FILE *fp)
    proc 0 reads from restart file, bcasts
 ------------------------------------------------------------------------- */
 
-void PairLJOff::read_restart_settings(FILE *fp)
+void PairHarmonic::read_restart_settings(FILE *fp)
 {
   int me = comm->me;
   if (me == 0) {
     fread(&cut_global,sizeof(double),1,fp);
-    fread(&offset_flag,sizeof(int),1,fp);
     fread(&mix_flag,sizeof(int),1,fp);
   }
   MPI_Bcast(&cut_global,1,MPI_DOUBLE,0,world);
-  MPI_Bcast(&offset_flag,1,MPI_INT,0,world);
   MPI_Bcast(&mix_flag,1,MPI_INT,0,world);
 }
 
@@ -349,41 +300,34 @@ void PairLJOff::read_restart_settings(FILE *fp)
    proc 0 writes to data file
 ------------------------------------------------------------------------- */
 
-void PairLJOff::write_data(FILE *fp)
+void PairHarmonic::write_data(FILE *fp)
 {
   for (int i = 1; i <= atom->ntypes; i++)
-    fprintf(fp,"%d %g %g %g\n",i,epsilon[i][i],sigma[i][i],r_offset[i][i]);
+    fprintf(fp,"%d %g\n",i,epsilon[i][i]);
 }
 
 /* ----------------------------------------------------------------------
    proc 0 writes all pairs to data file
 ------------------------------------------------------------------------- */
 
-void PairLJOff::write_data_all(FILE *fp)
+void PairHarmonic::write_data_all(FILE *fp)
 {
   for (int i = 1; i <= atom->ntypes; i++)
     for (int j = i; j <= atom->ntypes; j++)
-      fprintf(fp,"%d %d %g %g %g %g\n",i,j,epsilon[i][j],sigma[i][j],r_offset[i][j],cut[i][j]);
+      fprintf(fp,"%d %d %g %g\n",i,j,epsilon[i][j],cut[i][j]);
 }
 
 /* ---------------------------------------------------------------------- */
 
 
-double PairLJOff::single(int i, int j, int itype, int jtype, double rsq,
+double PairHarmonic::single(int i, int j, int itype, int jtype, double rsq,
                          double factor_coul, double factor_lj,
                          double &fforce)
 {
-  double r, rinv, rinv_norm, r2inv,r6inv,forcelj,philj;
+  double phi;
 
-  r = sqrt(rsq);
-  rinv_norm = 1.0/r;
-  rinv = 1.0/(r-r_offset[itype][jtype]);
-  r2inv = rinv*rinv;
-  r6inv = r2inv*r2inv*r2inv;
-  forcelj = r6inv * (lj1[itype][jtype]*r6inv - lj2[itype][jtype]);
-  fforce = factor_lj*forcelj*rinv*rinv_norm;
+  fforce = harmonic1[itype][jtype];
 
-  philj = r6inv*(lj3[itype][jtype]*r6inv-lj4[itype][jtype]) -
-    offset[itype][jtype];
-  return factor_lj*philj;
+  phi = 1-rsq*harmonic2[itype][jtype];
+  return epsilon[itype][jtype]*phi;
 }

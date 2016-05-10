@@ -121,6 +121,10 @@ void PairLJOff::compute(int eflag, int vflag)
         forcelj = r6inv * (lj1[itype][jtype]*r6inv - lj2[itype][jtype]);
         fpair = factor_lj*forcelj*rinv*rinv_norm;
 //	printf("dist = %f, eff.dist = %f, fpair = %f\n",r,r-r_offset[itype][jtype],fpair);
+	if (!evflag) if(r<r_offset[itype][jtype]){
+	  printf("distance = %f < offset = %f !\n",r,r_offset[itype][jtype]);
+	  error->all(FLERR,"distance between particles too small\n");
+	}
         f[i][0] += delx*fpair;
         f[i][1] += dely*fpair;
         f[i][2] += delz*fpair;

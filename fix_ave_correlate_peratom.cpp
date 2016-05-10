@@ -37,6 +37,7 @@ using namespace FixConst;
 
 enum{COMPUTE,FIX,VARIABLE};
 enum{ONE,RUNNING};
+enum{NORMAL,ORTHOGONAL};
 enum{AUTO,AUTOCROSS};
 
 #define INVOKED_SCALAR 1
@@ -104,6 +105,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   startstep = 0;
   prefactor = 1.0;
   fp = NULL;
+  dynamics = NORMAL;
   overwrite = 0;
   char *title1 = NULL;
   char *title2 = NULL;
@@ -146,6 +148,12 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
     } else if (strcmp(arg[iarg],"variable") == 0) {
       if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       //TODO
+      iarg += 2;
+    } else if (strcmp(arg[iarg],"dynamics") == 0) {
+      if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
+      if (strcmp(arg[iarg+1],"normal") == 0) dynamics = NORMAL;
+      else if (strcmp(arg[iarg+1],"orthogonal") == 0) dynamics = ORTHOGONAL;
+      else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       iarg += 2;
     } else if (strcmp(arg[iarg],"overwrite") == 0) {
       overwrite = 1;
@@ -242,6 +250,17 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   // npair = # of correlation pairs to calculate
 
   if (type == AUTO || type == AUTOCROSS) npair = nvalues;
+  
+  // initialize computes to calculate orthogonal dynamics
+  
+  if (dynamics == ORTHOGONAL) {
+    
+    //TODO
+    // initialize peratom compute/variable for velocities/forces
+    // initialize peratom store to calculate orthogonal dynamics -> this is just included into the large array
+    // initialize compute/fix to calculate mean velocity
+    
+  }
 
   // print file comment lines
 
@@ -454,7 +473,15 @@ void FixAveCorrelatePeratom::end_of_step()
     //if this was done by an atom-style variable, we need to free the mem we allocated
     if (which[i] == VARIABLE) {
       memory->destroy(peratom_data);
-     }
+    }
+    
+    
+    if (dynamics == ORTHOGONAL) {
+      //TODO
+      //update manually included computes/variables (velocity and forces)
+      //update orthogonal dynamics
+      
+    }
   }
 
   // fistindex = index in values ring of earliest time sample
@@ -552,7 +579,12 @@ void FixAveCorrelatePeratom::accumulate()
     for (i = 0; i < nvalues; i++) {
       for (j= 0; j < ngroup_loc; j++) {
 	for (k = 0; k < nsample; k++) {
-	  local_accum[k]+= array[indices_group[j]][i * nrepeat + m]*array[indices_group[j]][i * nrepeat + n];
+	  if (dynamics == NORMAL){
+	    local_accum[k]+= array[indices_group[j]][i * nrepeat + m]*array[indices_group[j]][i * nrepeat + n];
+	  } else {
+	    //TODO
+	    // calculate correlation with orthogonal dynamics array, should be easy, because the difficult part was done before
+	  }
 	  m--;
 	  if (m < 0) m = nrepeat-1;
 	}
@@ -655,6 +687,8 @@ double FixAveCorrelatePeratom::memory_usage() {
 ------------------------------------------------------------------------- */
 
 void FixAveCorrelatePeratom::grow_arrays(int nmax) {
+  //TODO
+  // additional store for orthogonal dynamics arrays
   memory->grow(array,nmax,nvalues*nrepeat,"fix_ave/correlate/peratom:array");
   array_atom = array;
   if (array) vector_atom = array[0];

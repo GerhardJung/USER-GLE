@@ -51,7 +51,7 @@ class FixAveCorrelatePeratom : public Fix {
   
   double **array; //used for peratom quantities
 
-  int type,ave,startstep,overwrite;
+  int type,ave,startstep,overwrite, dynamics;
   double prefactor;
   int bin;
   double range_lower,range_upper;

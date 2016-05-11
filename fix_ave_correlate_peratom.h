@@ -40,6 +40,10 @@ class FixAveCorrelatePeratom : public Fix {
   int unpack_exchange(int, double *);
   void grow_arrays(int);
   void copy_arrays(int, int, int);
+  
+ protected:
+  char *id_fix;
+  class FixStore *fix;
 
  private:
   int me,nvalues;
@@ -51,7 +55,7 @@ class FixAveCorrelatePeratom : public Fix {
   
   double **array; //used for peratom quantities
 
-  int type,ave,startstep,overwrite, dynamics;
+  int type,ave,startstep,overwrite, dynamics, memory_flag;
   double prefactor;
   int bin;
   double range_lower,range_upper;

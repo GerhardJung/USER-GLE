@@ -24,6 +24,8 @@
 #include "update.h"
 #include "modify.h"
 #include "compute.h"
+#include "group.h"
+#include "fix_store.h"
 #include "input.h"
 #include "variable.h"
 #include "memory.h"
@@ -37,7 +39,7 @@ using namespace FixConst;
 
 enum{COMPUTE,FIX,VARIABLE};
 enum{ONE,RUNNING};
-enum{NORMAL,ORTHOGONAL};
+enum{NORMAL,ORTHOGONAL,MEMORY};
 enum{AUTO,AUTOCROSS};
 
 #define INVOKED_SCALAR 1
@@ -61,11 +63,12 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   global_freq = nfreq;
   // parse values until one isn't recognized
 
-  which = new int[narg-6];
-  argindex = new int[narg-6];
-  ids = new char*[narg-6];
-  value2index = new int[narg-6];
+  which = new int[narg];
+  argindex = new int[narg];
+  ids = new char*[narg];
+  value2index = new int[narg];
   nvalues = 0;
+  memory_flag = 0;
 
   int iarg = 6;
   while (iarg < narg) {
@@ -94,6 +97,9 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
       delete [] suffix;
 
       nvalues++;
+      iarg++;
+    } else if (strcmp(arg[iarg],"memory") == 0 && memory_flag == 0) {
+      memory_flag = MEMORY;
       iarg++;
     } else break;
   }
@@ -151,8 +157,10 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
       iarg += 2;
     } else if (strcmp(arg[iarg],"dynamics") == 0) {
       if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
-      if (strcmp(arg[iarg+1],"normal") == 0) dynamics = NORMAL;
-      else if (strcmp(arg[iarg+1],"orthogonal") == 0) dynamics = ORTHOGONAL;
+      if (strcmp(arg[iarg+1],"normal") == 0) {
+	dynamics = NORMAL;
+	if (memory_flag!=0) error->all(FLERR,"Illegal fix ave/correlate/peratom command. Memory only computable with orthogonal dynamics.");
+      } else if (strcmp(arg[iarg+1],"orthogonal") == 0) dynamics = ORTHOGONAL;
       else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       iarg += 2;
     } else if (strcmp(arg[iarg],"overwrite") == 0) {
@@ -246,22 +254,41 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
       }
     }
   }
-
-  // npair = # of correlation pairs to calculate
-
-  if (type == AUTO || type == AUTOCROSS) npair = nvalues;
   
   // initialize computes to calculate orthogonal dynamics
   
   if (dynamics == ORTHOGONAL) {
-    
-    //TODO
-    // initialize peratom compute/variable for velocities/forces
-    // initialize peratom store to calculate orthogonal dynamics -> this is just included into the large array
-    // initialize compute/fix to calculate mean velocity
-    
-  }
 
+    // initialize peratom compute/variable for velocities/forces
+    // create new variables atom style
+    // id = fix_id + variable name
+    int n = strlen(id) + strlen("vx") + 1;
+    char *var_vx; char *var_vy; char *var_vz; char *var_fx; char *var_fy; char *var_fz; 
+    var_vx = new char[n]; var_vy = new char[n]; var_vz = new char[n]; var_fx = new char[n]; var_fy = new char[n]; var_fz = new char[n];
+    strcpy(var_vx,id); strcpy(var_vy,id); strcpy(var_vz,id); strcpy(var_fx,id); strcpy(var_fy,id); strcpy(var_fz,id);
+    strcat(var_vx,"vx"); strcat(var_vy,"vy");strcat(var_vz,"vz");strcat(var_fx,"fx");strcat(var_fy,"fy");strcat(var_fz,"fz");
+
+    char **newarg = new char*[18];
+    newarg[0] = var_fx; newarg[1] = (char *) "atom"; newarg[2] = (char *) "fx"; 
+    newarg[3] = var_fy; newarg[4] = (char *) "atom"; newarg[5] = (char *) "fy"; 
+    newarg[6] = var_fz; newarg[7] = (char *) "atom"; newarg[8] = (char *) "fz"; 
+    newarg[9] = var_vx; newarg[10] = (char *) "atom"; newarg[11] = (char *) "vx"; 
+    newarg[12] = var_vy; newarg[13] = (char *) "atom"; newarg[14] = (char *) "vy"; 
+    newarg[15] = var_vz; newarg[16] = (char *) "atom"; newarg[17] = (char *) "vz"; 
+    for (int i=0; i<6; i++) {
+      input->variable->set(3,&newarg[3*i]); 
+    }
+    
+    // include newly created variables into nvalues
+    for (int i=nvalues; i<nvalues+6; i++) {
+      which[i] = VARIABLE;
+      argindex[i] = 0;
+      ids[i] = new char[n];
+      strcpy(ids[i], newarg[3*(i-nvalues)]);
+    }
+    nvalues+=6;
+    delete [] newarg;
+  }
   // print file comment lines
 
   if (fp && me == 0) {
@@ -287,6 +314,10 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   delete [] title1;
   delete [] title2;
   delete [] title3;
+  
+  // npair = # of correlation pairs to calculate
+
+  if (type == AUTO || type == AUTOCROSS) npair = nvalues;
 
   // allocate and initialize memory for averaging
   // set count and corr to zero since they accumulate
@@ -391,6 +422,27 @@ void FixAveCorrelatePeratom::init()
     }
   }
 
+  if (dynamics==ORTHOGONAL){
+    // initialize fix to calculate mean velocity
+    // create a new fix store command
+    // id = fix_id + mean_velocity, store fix group = this fix group
+    int n = strlen(id) + strlen("_MEANVEL") + 1;
+    id_fix = new char[n];
+    strcpy(id_fix,id);
+    strcat(id_fix,"_MEANVEL");
+
+    char **newarg = new char*[6];
+    newarg[0] = id_fix;
+    newarg[1] = group->names[igroup];;
+    newarg[2] = (char *) "STORE";
+    newarg[3] = (char *) "peratom";
+    newarg[4] = (char *) "1";
+    newarg[5] = (char *) "3";
+    modify->add_fix(6,newarg);
+    fix = (FixStore *) modify->fix[modify->nfix-1];
+    delete [] newarg;
+  }
+
   // need to reset nvalid if nvalid < ntimestep b/c minimize was performed
 
   if (nvalid < update->ntimestep) {
@@ -433,7 +485,10 @@ void FixAveCorrelatePeratom::end_of_step()
 
   lastindex++;
   if (lastindex == nrepeat) lastindex = 0;
-
+  for (i = 0; i < atom->nlocal; i++)
+    for (m = nvalues-3; m < nvalues; m++)
+      //printf("mean_v=%f\n",fix->astore[i][m-nvalues+3]);
+  
   for (i = 0; i < nvalues; i++) {
     m = value2index[i];
 
@@ -475,13 +530,16 @@ void FixAveCorrelatePeratom::end_of_step()
       memory->destroy(peratom_data);
     }
     
-    
-    if (dynamics == ORTHOGONAL) {
+  }
+  
+  if (dynamics == ORTHOGONAL) {
       //TODO
+      //
+      // update velocities in fix_store. Velocities are the last three entries, that is fixed
+
       //update manually included computes/variables (velocity and forces)
       //update orthogonal dynamics
       
-    }
   }
 
   // fistindex = index in values ring of earliest time sample
@@ -584,6 +642,7 @@ void FixAveCorrelatePeratom::accumulate()
 	  } else {
 	    //TODO
 	    // calculate correlation with orthogonal dynamics array, should be easy, because the difficult part was done before
+	    local_accum[k]+= array[indices_group[j]][i * nrepeat + m]*array[indices_group[j]][i * nrepeat + n];
 	  }
 	  m--;
 	  if (m < 0) m = nrepeat-1;

@@ -56,6 +56,7 @@ class FixAveCorrelatePeratom : public Fix {
   double **array; //used for peratom quantities
 
   int type,ave,startstep,overwrite, dynamics, memory_flag;
+  int include_orthogonal, include_memory;
   double prefactor;
   int bin;
   double range_lower,range_upper;
@@ -75,7 +76,7 @@ class FixAveCorrelatePeratom : public Fix {
   int *save_count;     // saved values at Nfreq for output via compute_array()
   double **save_corr;
 
-  void accumulate();
+  void accumulate(int *indices_group, int ngroup_loc, int ngroup_tot);
   bigint nextvalid();
 };
 

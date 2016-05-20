@@ -48,6 +48,7 @@ class FixAveCorrelatePeratom : public Fix {
  private:
   int me,nvalues;
   int nrepeat,nfreq;
+  int nav,nsave;
   bigint nvalid;
   int *which,*argindex,*value2index;
   char **ids;
@@ -63,15 +64,12 @@ class FixAveCorrelatePeratom : public Fix {
   char *title1,*title2,*title3;
   long filepos;
 
-  int firstindex;      // index in values ring of earliest time sample
   int lastindex;       // index in values ring of latest time sample
   int nsample;         // number of time samples in values ring
 
   int npair;           // number of correlation pairs to calculate
   int *count;
   double **corr;
-  double *local_accum;	//local array for every proc. Will be allreduced to gloabal_accum.
-  double *global_accum;	//global array. Will be summed up in corr.
    
   int *save_count;     // saved values at Nfreq for output via compute_array()
   double **save_corr;

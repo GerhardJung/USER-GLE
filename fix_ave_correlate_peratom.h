@@ -76,6 +76,7 @@ class FixAveCorrelatePeratom : public Fix {
   
   int ngroup_glo;
   tagint *group_ids;
+  double *group_mass;
   double **group_data_loc,**group_data;
 
   void accumulate(int *indices_group, int ngroup_loc);

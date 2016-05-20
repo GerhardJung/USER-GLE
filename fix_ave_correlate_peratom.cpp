@@ -375,23 +375,27 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
       // create global memorys
       grow_arrays(ngroup_glo);
       tagint *group_ids_loc;
+      double *group_mass_loc;
       memory->create(group_ids,ngroup_glo,"ave/correlate/peratom:group_ids");
       memory->create(group_ids_loc,ngroup_glo,"ave/correlate/peratom:group_ids_loc");
+      memory->create(group_mass,ngroup_glo,"ave/correlate/peratom:group_mass");
+      memory->create(group_mass_loc,ngroup_glo,"ave/correlate/peratom:group_mass_loc");
       // find ids of groupmembers
       tagint *tag = atom->tag;
+      int *type = atom->type;
+      double *mass = atom->mass;
       for (j= 0; j < ngroup_glo; j++) {
-	group_ids_loc[j]=0;
-	group_ids[j]=0;
+	group_ids_loc[j]=group_ids[j]=group_mass_loc[j]=group_mass[j]=0;
       }
       for (j= 0; j < ngroup_loc; j++) {
 	group_ids_loc[j+ngroup_scan]=tag[indices_group[j]];
+	group_mass_loc[j+ngroup_scan]=mass[type[indices_group[j]]];
       }
       MPI_Allreduce(group_ids_loc, group_ids, ngroup_glo, MPI_INT, MPI_SUM, world);
+      MPI_Allreduce(group_mass_loc, group_mass, ngroup_glo, MPI_DOUBLE, MPI_SUM, world);
       memory->destroy(group_ids_loc);
-      // write ids in array to store mapping of group members to memory lines
-      for (j= 0; j < ngroup_loc; j++) {
-	array[j][0]=group_ids[j];
-      }
+      memory->destroy(group_mass_loc);
+
       // create memory for data storage and distribute
       memory->create(group_data_loc,ngroup_glo,nvalues+include_orthogonal+include_memory,"ave/correlate/peratom:group_data_loc");
       memory->create(group_data,ngroup_glo,nvalues+include_orthogonal+include_memory,"ave/correlate/peratom:group_data");
@@ -487,6 +491,8 @@ void FixAveCorrelatePeratom::end_of_step()
       
   int nlocal= atom->nlocal;
   int *mask= atom->mask;  
+  double *mass = atom->mass;
+  int *type = atom->type;
   tagint *tag = atom->tag;
   
   // skip if not step which requires doing something
@@ -672,11 +678,11 @@ void FixAveCorrelatePeratom::end_of_step()
 	for (j= 0; j < ngroup_glo; j++) {
 	  for (r=0; r<3; r++){
 	    m = lastindex;
-	    for (k = 0; k < nsave; k++) {
-	      double pnm = array[j][(r+nvalues+include_memory)*nsave+m];
+	    for (k = 0; k < nsave-1; k++) {
+	      double pnm = array[j][(r+nvalues+include_memory)*nsave+m-1];
 	      norm[j][r] += pnm*pnm;
 	      m--;
-	      if (m < 0) m = nsave-1;
+	      if (m < 1) m = nsave;
 	    }
 	  }
 	}
@@ -684,12 +690,12 @@ void FixAveCorrelatePeratom::end_of_step()
 	  for (r=0; r<3; r++){
 	    for (i=0; i<nvalues+include_memory; i++) {
 	      m = lastindex;
-	      for (k = 0; k < nsave; k++) {
-		double pnm = array[j][(r+nvalues+include_memory)*nsave+m];
+	      for (k = 0; k < nsave-1; k++) {
+		double pnm = array[j][(r+nvalues+include_memory)*nsave+m-1];
 		double anm = array[j][i*nsave+nsave-1-k];
 		alpha[j][r*(nvalues+include_memory)+i] += anm*pnm;
 		m--;
-		if (m < 0) m = nsave-1;
+		if (m < 1) m = nsave;
 	      }
 	    }
 	  }
@@ -698,9 +704,9 @@ void FixAveCorrelatePeratom::end_of_step()
 	for (j= 0; j < ngroup_glo; j++) {
 	  for (r=0; r<3; r++){
 	    for (i=0; i<nvalues+include_memory; i++) {
-	      alpha[j][r*(nvalues+include_memory)+i] /= norm[j][r];
+	      alpha[j][r*(nvalues+include_memory)+i] /= norm[j][r]*group_mass[j];
 	      // normal dynamics
-	      alpha[j][r*(nvalues+include_memory)+i] = 0;
+	      // alpha[j][r*(nvalues+include_memory)+i] = 0;
 	    }
 	  }
 	}
@@ -800,9 +806,9 @@ void FixAveCorrelatePeratom::end_of_step()
 void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 {
   int i,j,k,m,n,ipair;
+  int t = nsample - nsave;
   int nlocal= atom->nlocal;
   tagint *tag = atom->tag;
-  int t = nsample - nsave;
   double *local_accum;
   double *global_accum;
 
@@ -819,7 +825,7 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
     memory->create(global_accum,1,"ave/correlate/peratom:global_accum");
     //printf("time=%d\n",t);
     local_accum[0] = 0;
-    count[t]+=nav;
+    count[t]+=nsave;
   }
   
  

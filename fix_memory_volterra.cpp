@@ -20,7 +20,7 @@
 #include "stdlib.h"
 #include "string.h"
 #include "unistd.h"
-#include "fix_ave_correlate_peratom.h"
+#include "fix_memory_volterra.h"
 #include "update.h"
 #include "modify.h"
 #include "compute.h"
@@ -38,10 +38,7 @@
 using namespace LAMMPS_NS;
 using namespace FixConst;
 
-enum{COMPUTE,FIX,VARIABLE};
 enum{ONE,RUNNING};
-enum{NORMAL,ORTHOGONAL};
-enum{AUTO,AUTOCROSS,AUTOUPPER};
 enum{PERATOM,GLOBAL};
 
 #define INVOKED_SCALAR 1
@@ -51,7 +48,7 @@ enum{PERATOM,GLOBAL};
 
 /* ---------------------------------------------------------------------- */
 
-FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **arg):
+FixMemoryVolterra::MemoryVolterra(LAMMPS * lmp, int narg, char **arg):
   Fix (lmp, narg, arg)
 {
   if (narg < 7) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
@@ -399,7 +396,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
 
 /* ---------------------------------------------------------------------- */
 
-FixAveCorrelatePeratom::~FixAveCorrelatePeratom()
+FixMemoryVolterra::~FixMemoryVolterra()
 {
   delete [] which;
   delete [] argindex;
@@ -419,7 +416,7 @@ FixAveCorrelatePeratom::~FixAveCorrelatePeratom()
 
 /* ---------------------------------------------------------------------- */
 
-int FixAveCorrelatePeratom::setmask()
+int FixMemoryVolterra::setmask()
 {
   int mask = 0;
   mask |= END_OF_STEP;
@@ -428,7 +425,7 @@ int FixAveCorrelatePeratom::setmask()
 
 /* ---------------------------------------------------------------------- */
 
-void FixAveCorrelatePeratom::init()
+void FixMemoryVolterra::init()
 {
   // set current indices for all computes,fixes,variables
   int i;
@@ -468,14 +465,14 @@ void FixAveCorrelatePeratom::init()
    only does something if nvalid = current timestep
 ------------------------------------------------------------------------- */
 
-void FixAveCorrelatePeratom::setup(int vflag)
+void FixMemoryVolterra::setup(int vflag)
 {
   end_of_step();
 }
 
 /* ---------------------------------------------------------------------- */
 
-void FixAveCorrelatePeratom::end_of_step()
+void FixMemoryVolterra::end_of_step()
 {
   
   int a,i,j,v,ngroup_loc=0;
@@ -760,140 +757,10 @@ void FixAveCorrelatePeratom::end_of_step()
 }
 
 /* ----------------------------------------------------------------------
-   accumulate correlation data using more recently added values
-------------------------------------------------------------------------- */
-
-void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
-{
-  int a,i,j,k,m,n,ipair;
-  int t = nsample - nsave;
-  int nlocal= atom->nlocal;
-  tagint *tag = atom->tag;
-  double *local_accum;
-  double *global_accum;
-
-  if(dynamics == NORMAL){
-    memory->create(local_accum,nsample,"ave/correlate/peratom:local_accum");
-    memory->create(global_accum,nsample,"ave/correlate/peratom:global_accum");
-    for (k = 0; k < nsample; k++){
-      local_accum[k] = global_accum[k] = 0;
-      count[k]++;
-    }
-  } else {
-    if(t>=nrepeat) return;
-    memory->create(local_accum,1,"ave/correlate/peratom:local_accum");
-    memory->create(global_accum,1,"ave/correlate/peratom:global_accum");
-    //printf("time=%d\n",t);
-    local_accum[0] = 0;
-    count[t]+=nsave;
-  }
-  
-  if (type == AUTO) { // type = auto -> calculate only self-correlation
-    ipair = 0;
-    n = lastindex;
-    for (i = 0; i < nvalues; i++) {
-      for (a= 0; a < ngroup_loc; a++) {
-	m = lastindex;
-	int ind;
-	if(memory_switch==PERATOM){
-	  ind=indices_group[a];
-	} else {
-	  tagint *ids_ptr;
-	  ids_ptr = std::find(group_ids,group_ids+ngroup_glo,tag[indices_group[a]]);
-	  ind = (ids_ptr - group_ids);
-	}
-	if(dynamics==NORMAL){
-	  for (k = 0; k < nsample; k++) {
-	    local_accum[k]+= array[ind][i * nsave + m]*array[ind][i * nsave + n];
-	    m--;
-	    if (m < 0) m = nsave-1;
-	  }
-	} else {
-	  for (k = 0; k < nsave; k++) {
-	    local_accum[0]+= array[ind][(i+nvalues)*nsave+m]*array[ind][i*nsave+nsave-1-k];
-	    m--;
-	    if (m < 0) m = nsave-1;
-	  }
-	}
-      }
-      // reduce the results from each proc to calculate the global correlation
-      if(dynamics == NORMAL){
-	MPI_Allreduce(local_accum, global_accum, nsample, MPI_DOUBLE, MPI_SUM, world);
-	for (k = 0; k < nsample; k++) {
-	  global_accum[k]/= ngroup_glo;
-	  corr[k][ipair]+= global_accum[k];
-	  local_accum[k] = global_accum[k] = 0;
-	}
-      } else {
-	MPI_Allreduce(local_accum, global_accum, 1, MPI_DOUBLE, MPI_SUM, world);
-	global_accum[0]/= ngroup_glo;
-	corr[t][ipair] += global_accum[0];
-	local_accum[0] = global_accum[0] = 0;
-      }
-      ipair++;
-    }
-  } else if (type == AUTOUPPER) {
-    ipair = 0;
-    n = lastindex;
-    for (i = 0; i < nvalues; i++) {
-      for (j = i; j < nvalues; j++) {
-	for (a= 0; a < ngroup_loc; a++) {
-	  m = lastindex;
-	  int ind;
-	  if(memory_switch==PERATOM){
-	    ind=indices_group[a];
-	  } else {
-	    tagint *ids_ptr;
-	    ids_ptr = std::find(group_ids,group_ids+ngroup_glo,tag[indices_group[a]]);
-	    ind = (ids_ptr - group_ids);
-	  }
-	  if(dynamics==NORMAL){
-	    for (k = 0; k < nsample; k++) {
-	      local_accum[k]+= array[ind][i * nsave + m]*array[ind][j * nsave + n];
-	      m--;
-	      if (m < 0) m = nsave-1;
-	    }
-	  } else {
-	    for (k = 0; k < nsave; k++) {
-	      local_accum[0]+= array[ind][(i+nvalues)*nsave+m]*array[ind][j*nsave+nsave-1-k];
-	      m--;
-	      if (m < 0) m = nsave-1;
-	    }
-	  }
-	}
-	// reduce the results from each proc to calculate the global correlation
-	if(dynamics == NORMAL){
-	  MPI_Allreduce(local_accum, global_accum, nsample, MPI_DOUBLE, MPI_SUM, world);
-	  for (k = 0; k < nsample; k++) {
-	    global_accum[k]/= ngroup_glo;
-	    corr[k][ipair]+= global_accum[k];
-	    local_accum[k] = global_accum[k] = 0;
-	  }
-	} else {
-	  MPI_Allreduce(local_accum, global_accum, 1, MPI_DOUBLE, MPI_SUM, world);
-	  global_accum[0]/= ngroup_glo;
-	  corr[t][ipair] += global_accum[0];
-	  local_accum[0] = global_accum[0] = 0;
-	}
-      ipair++;
-      }
-    }
-  } else {  // type = auto/cross -> calculate cross correlations between particles
-    
-    //TODO
-    
-  }
-  
-  memory->destroy(local_accum);
-  memory->destroy(global_accum);
-
-}
-
-/* ----------------------------------------------------------------------
    return I,J array value
 ------------------------------------------------------------------------- */
 
-double FixAveCorrelatePeratom::compute_array(int i, int j)
+double FixMemoryVolterra::compute_array(int i, int j)
 {
   if (j == 0) return 1.0*i*nevery;
   else if (j == 1) return 1.0*save_count[i];
@@ -907,7 +774,7 @@ double FixAveCorrelatePeratom::compute_array(int i, int j)
    startstep is lower bound
 ------------------------------------------------------------------------- */
 
-bigint FixAveCorrelatePeratom::nextvalid()
+bigint FixMemoryVolterra::nextvalid()
 {
   bigint nvalid = update->ntimestep;
   if (startstep > nvalid) nvalid = startstep;
@@ -917,14 +784,14 @@ bigint FixAveCorrelatePeratom::nextvalid()
 
 /* ---------------------------------------------------------------------- */
 
-void FixAveCorrelatePeratom::reset_timestep(bigint ntimestep)
+void FixMemoryVolterra::reset_timestep(bigint ntimestep)
 {
   if (ntimestep > nvalid) error->all(FLERR,"Fix ave/correlate/peratom missed timestep");
 }
 
 /* --------------------------------------------------------------------- */
 
-int FixAveCorrelatePeratom::pack_exchange(int i, double* buf) {
+int FixMemoryVolterra::pack_exchange(int i, double* buf) {
   int offset= 0;
   for (int m= 0; m < nvalues + include_orthogonal; m++) {
     for (int k= 0; k < nsample; k++) {
@@ -940,7 +807,7 @@ int FixAveCorrelatePeratom::pack_exchange(int i, double* buf) {
 
 /* --------------------------------------------------------------------- */
 
-int FixAveCorrelatePeratom::unpack_exchange(int nlocal, double* buf) {
+int FixMemoryVolterra::unpack_exchange(int nlocal, double* buf) {
   int offset= 0;
   for (int m= 0; m < nvalues + include_orthogonal; m++) {
     for (int k= 0; k < nsample; k++) {
@@ -958,7 +825,7 @@ int FixAveCorrelatePeratom::unpack_exchange(int nlocal, double* buf) {
    memory usage of local atom-based array
 ------------------------------------------------------------------------- */
 
-double FixAveCorrelatePeratom::memory_usage() {
+double FixMemoryVolterra::memory_usage() {
   double bytes;
   int atoms;
   
@@ -972,7 +839,7 @@ double FixAveCorrelatePeratom::memory_usage() {
    allocate atom-based array
 ------------------------------------------------------------------------- */
 
-void FixAveCorrelatePeratom::grow_arrays(int nmax) {
+void FixMemoryVolterra::grow_arrays(int nmax) {
   memory->grow(array,nmax,(nvalues + include_orthogonal)*nsave,"fix_ave/correlate/peratom:array");
   array_atom = array;
   if (array) vector_atom = array[0];
@@ -983,7 +850,7 @@ void FixAveCorrelatePeratom::grow_arrays(int nmax) {
    copy values within local atom-based array
 ------------------------------------------------------------------------- */
 
-void FixAveCorrelatePeratom::copy_arrays(int i, int j, int delflag) {
+void FixMemoryVolterra::copy_arrays(int i, int j, int delflag) {
   int offset= 0;
   for (int m= 0; m < nvalues + include_orthogonal; m++) {
     for (int k= 0; k < nsample; k++) {

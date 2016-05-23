@@ -13,22 +13,22 @@
 
 #ifdef FIX_CLASS
 
-FixStyle(ave/correlate/peratom,FixAveCorrelatePeratom)
+FixStyle(memory/volterra,FixMemoryVolterra)
 
 #else
 
-#ifndef LMP_FIX_AVE_CORRELATE_PERATOM_H
-#define LMP_FIX_AVE_CORRELATE_PERATOM_H
+#ifndef LMP_FIX_MEMORY_VOLTERRA_H
+#define LMP_FIX_MEMORY_VOLTERRA_H
 
 #include "stdio.h"
 #include "fix.h"
 
 namespace LAMMPS_NS {
 
-class FixAveCorrelatePeratom : public Fix {
+class FixMemoryVolterra : public Fix {
  public:
-  FixAveCorrelatePeratom(class LAMMPS *, int, char **);
-  ~FixAveCorrelatePeratom();
+  FixMemoryVolterra(class LAMMPS *, int, char **);
+  ~FixMemoryVolterra();
   int setmask();
   void init();
   void setup(int);
@@ -36,46 +36,15 @@ class FixAveCorrelatePeratom : public Fix {
   double compute_array(int,int);
   void reset_timestep(bigint);
   double memory_usage();
-  int pack_exchange(int, double *);
-  int unpack_exchange(int, double *);
   void grow_arrays(int);
   void copy_arrays(int, int, int);
 
  private:
-  int me,nvalues;
-  int nrepeat,nfreq;
-  int nav,nsave;
-  bigint nvalid;
-  int *which,*argindex,*value2index;
-  char **ids;
-  FILE *fp;
+  int nrepeat,nfreq,nevery_corr;
   
-  double **array; //used for peratom quantities
+  double **corr; //used to store correlation
+  double **mem;  //used to memory
 
-  int type,ave,startstep,overwrite, dynamics, memory_switch;
-  int include_orthogonal;
-  double prefactor;
-  int bins;		//for variable dependence of the correlation
-  double range_lower,range_upper;
-  char *title1,*title2,*title3;
-  long filepos;
-
-  int lastindex;       // index in values ring of latest time sample
-  int nsample;         // number of time samples in values ring
-
-  int npair;           // number of correlation pairs to calculate
-  int *count;
-  double **corr;
-   
-  int *save_count;     // saved values at Nfreq for output via compute_array()
-  double **save_corr;
-  
-  int ngroup_glo;
-  tagint *group_ids;
-  double *group_mass;
-  double **group_data_loc,**group_data;
-
-  void accumulate(int *indices_group, int ngroup_loc);
   bigint nextvalid();
 };
 

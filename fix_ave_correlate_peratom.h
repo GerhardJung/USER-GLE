@@ -61,6 +61,7 @@ class FixAveCorrelatePeratom : public Fix {
   long filepos;
 
   int lastindex;       // index in values ring of latest time sample
+  int firstindex;	// index in values ring of oldest time sample
   int nsample;         // number of time samples in values ring
 
   int npair;           // number of correlation pairs to calculate

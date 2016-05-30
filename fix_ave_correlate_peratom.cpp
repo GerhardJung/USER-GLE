@@ -40,7 +40,7 @@ using namespace FixConst;
 
 enum{COMPUTE,FIX,VARIABLE};
 enum{ONE,RUNNING};
-enum{NORMAL,ORTHOGONAL};
+enum{NORMAL,ORTHOGONAL,ORTHOGONALSECOND};
 enum{AUTO,AUTOCROSS,AUTOUPPER};
 enum{PERATOM,GLOBAL};
 
@@ -161,6 +161,9 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
       else if (strcmp(arg[iarg+1],"orthogonal") == 0) {
 	dynamics = ORTHOGONAL;
 	include_orthogonal = nvalues + 6;
+      } else if (strcmp(arg[iarg+1],"orthogonal/second") == 0) {
+	dynamics = ORTHOGONALSECOND;
+	include_orthogonal = nvalues + 6;
       } else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       iarg += 2;
     } else if (strcmp(arg[iarg],"switch") == 0) {
@@ -207,7 +210,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
     error->all(FLERR,"Illegal fix ave/correlate/peratom command");
   if (ave != RUNNING && overwrite)
     error->all(FLERR,"Illegal fix ave/correlate/peratom command");
-  if (dynamics == ORTHOGONAL) {
+  if (dynamics == ORTHOGONAL || dynamics == ORTHOGONALSECOND) {
     nav = nfreq/nevery - nrepeat;
     // to calculate orthogonal dynamics we first have to initialize the arrays with nav values. 
     // then we can calculate the correlation for the next nrepeat steps.
@@ -330,6 +333,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   // since don't know a priori which are invoked by this fix
   // once in end_of_step() can set timestep for ones actually invoked
 
+  firstindex = 0;
   lastindex = -1;
   nsample = 0;
   nvalid = nextvalid();
@@ -355,7 +359,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   //printf("local=%d, scan=%d, global=%d\n",ngroup_loc,ngroup_scan,ngroup_glo);
   
   array= NULL;
-  if(nvalues > 0 || dynamics == ORTHOGONAL) {
+  if(nvalues > 0) {
     if(memory_switch == PERATOM){
       grow_arrays(atom->nmax);
       // need to grow array size
@@ -453,6 +457,7 @@ void FixAveCorrelatePeratom::init()
   // need to reset nvalid if nvalid < ntimestep b/c minimize was performed
 
   if (nvalid < update->ntimestep) {
+    firstindex = 0;
     lastindex = -1;
     nsample = 0;
     nvalid = nextvalid();
@@ -521,7 +526,6 @@ void FixAveCorrelatePeratom::end_of_step()
   if (lastindex == nsave) lastindex = 0;
   
   for (i = 0; i < nvalues; i++) {
-    if (dynamics==ORTHOGONAL && nsample == nsave) break;
     v = value2index[i];
 
     // invoke compute if not previously invoked
@@ -557,9 +561,9 @@ void FixAveCorrelatePeratom::end_of_step()
       if(memory_switch==PERATOM){
 	int offset1= i*nsave + lastindex;
 	array[indices_group[a]][offset1]= data;
-	if (dynamics == ORTHOGONAL) {
-	  int offset2= (i+nvalues)*nsave + lastindex;
-	  array[indices_group[a]][offset2]= peratom_data[indices_group[a]];
+	if ( (dynamics == ORTHOGONAL || dynamics == ORTHOGONALSECOND) && nsample < nsave) {
+	  int offset2= (i+nvalues+6)*nsave + lastindex;
+	  array[indices_group[a]][offset2]= data;
 	}
       } else {
 	tagint *ids_ptr;
@@ -567,8 +571,8 @@ void FixAveCorrelatePeratom::end_of_step()
 	int ind = (ids_ptr - group_ids);
 	//printf("base %d, id %d ind %d\n",group_ids,ids_ptr,n);
 	group_data_loc[ind][i] = data;
-	if (dynamics == ORTHOGONAL) {
-	  group_data_loc[ind][i+nvalues] = data;
+	if ( (dynamics == ORTHOGONAL || dynamics == ORTHOGONALSECOND) && nsample < nsave) {
+	  group_data_loc[ind][i+nvalues+6] = data;
 	}
       }
     }
@@ -579,7 +583,7 @@ void FixAveCorrelatePeratom::end_of_step()
     }
   }
   
-  if (dynamics == ORTHOGONAL) {
+  if (dynamics == ORTHOGONAL || dynamics == ORTHOGONALSECOND) {
     double **v = atom->v;
     double **f = atom->f;
     int r;
@@ -587,26 +591,26 @@ void FixAveCorrelatePeratom::end_of_step()
     for (a= 0; a < ngroup_loc; a++) {
       for (r = 0; r < 3 ; r++) {
 	if(memory_switch==PERATOM){
-	  int offset = (r+2*nvalues)*nsave + lastindex;
+	  int offset = (r+nvalues)*nsave + lastindex;
 	  array[indices_group[a]][offset] = v[indices_group[a]][r];
 	} else {
 	  tagint *ids_ptr;
 	  ids_ptr = std::find(group_ids,group_ids+ngroup_glo,tag[indices_group[a]]);
 	  int ind = (ids_ptr - group_ids);
-	  group_data_loc[ind][r+2*nvalues] = v[indices_group[a]][r];
+	  group_data_loc[ind][r+nvalues] = v[indices_group[a]][r];
 	}
       }
     }
     for (a= 0; a < ngroup_loc; a++) {
       for (r = 0; r < 3 ; r++) {
 	if(memory_switch==PERATOM){
-	  int offset= (r+2*nvalues+3)*nsave + lastindex;
+	  int offset= (r+nvalues+3)*nsave + lastindex;
 	  array[indices_group[a]][offset] = f[indices_group[a]][r];
 	} else {
 	  tagint *ids_ptr;
 	  ids_ptr = std::find(group_ids,group_ids+ngroup_glo,tag[indices_group[a]]);
 	  int ind = (ids_ptr - group_ids);
-	  group_data_loc[ind][r+2*nvalues+3] = f[indices_group[a]][r];
+	  group_data_loc[ind][r+nvalues+3] = f[indices_group[a]][r];
 	}
       }
     }
@@ -614,9 +618,12 @@ void FixAveCorrelatePeratom::end_of_step()
   
   // include group_data into global array
   if(memory_switch==GLOBAL){
-    MPI_Allreduce(&group_data_loc[0][0], &group_data[0][0], ngroup_glo*(nvalues+include_orthogonal), MPI_DOUBLE, MPI_SUM, world);
+    // exclude the last nvalues while memory calculation is performed
+    double exclude_memory = 0;
+    if ((nsample >= nsave) && (dynamics == ORTHOGONAL || dynamics == ORTHOGONALSECOND)) exclude_memory = -nvalues;
+    MPI_Allreduce(&group_data_loc[0][0], &group_data[0][0], ngroup_glo*(nvalues+include_orthogonal+exclude_memory), MPI_DOUBLE, MPI_SUM, world);
     for (a= 0; a < ngroup_glo; a++) {
-      for (i=0; i< nvalues+include_orthogonal;i++) {
+      for (i=0; i< nvalues+include_orthogonal+exclude_memory;i++) {
 	int offset = i*nsave + lastindex;
 	array[a][offset] = group_data[a][i];
       }
@@ -627,7 +634,7 @@ void FixAveCorrelatePeratom::end_of_step()
   // fistindex = index in values ring of earliest time sample
   // nsample = number of time samples in values ring
 
-  if(dynamics==ORTHOGONAL || nsample < nsave) nsample++;
+  if( (dynamics==ORTHOGONAL || dynamics == ORTHOGONALSECOND) || nsample < nsave) nsample++;
 
   nvalid += nevery;
   modify->addstep_compute(nvalid);
@@ -636,6 +643,7 @@ void FixAveCorrelatePeratom::end_of_step()
   if (dynamics==NORMAL || nsample == nsave){
     accumulate(indices_group, ngroup_loc);
   } else if (dynamics==ORTHOGONAL && nsample > nsave) {
+    
     int k,m,r;
     
     //calculate alpha + norm
@@ -643,27 +651,29 @@ void FixAveCorrelatePeratom::end_of_step()
     double **norm;
     memory->create(alpha,ngroup_glo,3*nvalues,"ave/correlate/peratom:alpha");
     memory->create(norm,ngroup_glo,3,"ave/correlate/peratom:norm");
+
     for (a= 0; a < ngroup_glo; a++) {
       for (r=0; r<3; r++){
 	//reset + calculate norm
 	norm[a][r] = 0;
-	m = lastindex;
-	for (k = 0; k < nsave-1; k++) {
-	  double pnm = array[a][(r+2*nvalues)*nsave+m-1];
+	//go to A_1 -> data from the previos step is needed
+	m = lastindex - 1;
+	for (k = nsave-1; k > 0; k--) {
+	  if (m < 0) m = nsave -1;
+	  double pnm = array[a][(r+nvalues)*nsave+m];
 	  norm[a][r] += pnm*pnm;
 	  m--;
-	  if (m < 1) m = nsave;
 	}
 	// reset + calculate + norm alpha
 	for (i=0; i<nvalues; i++) {
 	  alpha[a][r*nvalues+i] = 0;
-	  m = lastindex;
-	  for (k = 0; k < nsave-1; k++) {
-	    double pnm = array[a][(r+2*nvalues)*nsave+m-1];
-	    double anm = array[a][i*nsave+nsave-1-k];
+	  m = lastindex - 1;
+	  for (k = nsave-1; k > 0; k--) {
+	    if (m < 0) m = nsave-1;
+	    double pnm = array[a][(r+nvalues)*nsave+m];
+	    double anm = array[a][(i+nvalues+6)*nsave+k];
 	    alpha[a][r*nvalues+i] += anm*pnm;
 	    m--;
-	    if (m < 1) m = nsave;
 	  }
 	  alpha[a][r*nvalues+i] /= norm[a][r]*group_mass[a];
 	}
@@ -674,12 +684,12 @@ void FixAveCorrelatePeratom::end_of_step()
     for (a= 0; a < ngroup_glo; a++) {
       for (r=0; r<3; r++){
 	for (i=0; i<nvalues; i++) {
-	  m = lastindex;
-	  for (k = 0; k < nsave; k++) {
-	    double fnm = array[a][(r+2*nvalues+3)*nsave+m];
-	    array[a][i*nsave+nsave-1-k] += alpha[a][r*nvalues+i]*fnm*update->dt;
-	    m--;
+	  m = lastindex-1;
+	  for (k = nsave-1; k > 0; k--) {
 	    if (m < 0) m = nsave-1;
+	    double fnm = array[a][(r+nvalues+3)*nsave+m];
+	    array[a][(i+nvalues+6)*nsave+k] += alpha[a][r*nvalues+i]*fnm*update->dt;
+	    m--;
 	  }
 	}
       }
@@ -689,6 +699,93 @@ void FixAveCorrelatePeratom::end_of_step()
     memory->destroy(norm);
     //accumulate
     accumulate(indices_group, ngroup_loc);
+  } else if (dynamics==ORTHOGONALSECOND && nsample > nsave) {
+    int k,m,mm1,mp1,r;
+    
+    //calculate alpha + kappa + epsilon + zeta + norm
+    double **alpha;
+    double **epsilon;
+    double *kappa;
+    double *zeta;
+    double **norm;
+    memory->create(alpha,ngroup_glo,3*nvalues,"ave/correlate/peratom:alpha");
+    memory->create(epsilon,ngroup_glo,3*nvalues,"ave/correlate/peratom:epsilon");
+    memory->create(kappa,ngroup_glo,"ave/correlate/peratom:kappa");
+    memory->create(zeta,ngroup_glo,"ave/correlate/peratom:zeta");
+    memory->create(norm,ngroup_glo,3,"ave/correlate/peratom:norm");
+    
+    for (a= 0; a < ngroup_glo; a++) {
+      kappa[a] = 0;
+      zeta[a] = 0;
+      for (r=0; r<3; r++){
+	//reset + calculate norm
+	norm[a][r] = 0;
+	// initialize the counter
+	m = lastindex-1; 
+	if (m < 0) m = nsave-1;
+	mm1 = m-1;
+	if (mm1 < 0) mm1 = nsave-1;
+	for (k = nsave-1; k > 1; k--) {
+	  double pnm = array[a][(r+nvalues)*nsave+m];
+	  double fnm = array[a][(r+nvalues+3)*nsave+m];
+	  double fnmm1 = array[a][(r+nvalues+3)*nsave+mm1];
+	  norm[a][r] += pnm*pnm;
+	  kappa[a] += pnm*fnm;
+	  zeta[a] += pnm*fnmm1;
+	  m--; mm1--;
+	  if (m < 0) m = nsave-1; if (mm1 < 0) mm1 = nsave-1;
+	}
+	kappa[a] /= norm[a][0]+norm[a][1]+norm[a][2];
+	zeta[a] /= norm[a][0]+norm[a][1]+norm[a][2];
+	// reset + calculate + norm alpha
+	for (i=0; i<nvalues; i++) {
+	  alpha[a][r*nvalues+i] = 0;
+	  epsilon[a][r*nvalues+i] = 0;
+	  m = lastindex-1;
+	  if (m < 0) m = nsave-1;
+	  for (k = nsave-1; k > 1; k--) {
+	    double pnm = array[a][(r+nvalues)*nsave+m];
+	    double anm = array[a][(i+nvalues+6)*nsave+k];
+	    double anmm1 = array[a][(i+nvalues+6)*nsave+k-1];
+	    alpha[a][r*nvalues+i] += anm*pnm;
+	    epsilon[a][r*nvalues+i] += anmm1*pnm;
+	    m--;
+	    if (m < 0) m = nsave-1;
+	  }
+	  alpha[a][r*nvalues+i] /= norm[a][r]*group_mass[a];
+	  epsilon[a][r*nvalues+i] /= norm[a][r]*group_mass[a];
+	}
+      }
+    }
+
+    //calculate A(n+1)
+    for (a= 0; a < ngroup_glo; a++) {
+      for (r=0; r<3; r++){
+	for (i=0; i<nvalues; i++) {
+	  m = lastindex-1; 
+	  if (m < 0) m = nsave-1;
+	  mp1 = lastindex;
+	  for (k = nsave-1; k > 0; k--) {
+	    double fnm = array[a][(r+nvalues+3)*nsave+m];
+	    double fnmp1 = array[a][(r+nvalues+3)*nsave+mp1];
+	    array[a][(i+nvalues+6)*nsave+k] += alpha[a][r*nvalues+i]*fnm*update->dt/2
+	      +update->dt/2*fnmp1/(1-update->dt/2*kappa[a])
+	      *(epsilon[a][r*nvalues+i]+zeta[a]*alpha[a][r*nvalues+i]*update->dt/2);
+	    m--; mp1--;
+	    if (m < 0) m = nsave-1; if (mp1 < 0) mp1 = nsave-1;
+	  }
+	}
+      }
+    }
+	
+    memory->destroy(alpha);
+    memory->destroy(epsilon);
+    memory->destroy(kappa);
+    memory->destroy(zeta);
+    memory->destroy(norm);
+    //accumulate
+    accumulate(indices_group, ngroup_loc);
+    
   }
     
   if (ntimestep % nfreq || ntimestep == 0) {
@@ -781,7 +878,7 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
     memory->create(global_accum,1,"ave/correlate/peratom:global_accum");
     //printf("time=%d\n",t);
     local_accum[0] = 0;
-    count[t]+=nsave;
+    count[t]+=nsave-1;
   }
   
   if (type == AUTO) { // type = auto -> calculate only self-correlation
@@ -805,8 +902,8 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 	    if (m < 0) m = nsave-1;
 	  }
 	} else {
-	  for (k = 0; k < nsave; k++) {
-	    local_accum[0]+= array[ind][(i+nvalues)*nsave+m]*array[ind][i*nsave+nsave-1-k];
+	  for (k = nsave-1; k > 0; k--) {
+	    local_accum[0]+= array[ind][i*nsave+m]*array[ind][(i+nvalues+6)*nsave+k];
 	    m--;
 	    if (m < 0) m = nsave-1;
 	  }

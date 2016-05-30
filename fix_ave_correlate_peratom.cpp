@@ -157,20 +157,17 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
       iarg += 2;
     } else if (strcmp(arg[iarg],"dynamics") == 0) {
       if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
-      if (strcmp(arg[iarg+1],"normal") == 0) {
-	dynamics = NORMAL;
-      } else if (strcmp(arg[iarg+1],"orthogonal") == 0) {
+      if (strcmp(arg[iarg+1],"normal") == 0) dynamics = NORMAL;
+      else if (strcmp(arg[iarg+1],"orthogonal") == 0) {
 	dynamics = ORTHOGONAL;
 	include_orthogonal = nvalues + 6;
       } else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       iarg += 2;
     } else if (strcmp(arg[iarg],"switch") == 0) {
       if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
-      if (strcmp(arg[iarg+1],"peratom") == 0) {
-	memory_switch = PERATOM;
-      } else if (strcmp(arg[iarg+1],"global") == 0) {
-	memory_switch = ORTHOGONAL;
-      } else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
+      if (strcmp(arg[iarg+1],"peratom") == 0) memory_switch = PERATOM;
+      else if (strcmp(arg[iarg+1],"global") == 0) memory_switch = GLOBAL;
+      else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       iarg += 2;
     } else if (strcmp(arg[iarg],"overwrite") == 0) {
       overwrite = 1;
@@ -279,7 +276,6 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   // npair = # of correlation pairs to calculate
    if (type == AUTO || type == AUTOCROSS) npair = nvalues;
    if (type == AUTOUPPER) npair = nvalues*(nvalues+1)/2;
- 
   // print file comment lines
   if (fp && me == 0) {
     if (title1) fprintf(fp,"%s\n",title1);
@@ -401,6 +397,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
 
 FixAveCorrelatePeratom::~FixAveCorrelatePeratom()
 {
+
   delete [] which;
   delete [] argindex;
   delete [] value2index;
@@ -699,7 +696,6 @@ void FixAveCorrelatePeratom::end_of_step()
     return;
   }
   // save results in save_count and save_corr
-
   for (i = 0; i < nrepeat; i++) {
     save_count[i] = count[i];
     if (count[i])

@@ -11,41 +11,38 @@
    See the README file in the top-level LAMMPS directory.
 ------------------------------------------------------------------------- */
 
-#ifdef FIX_CLASS
+#ifdef COMPUTE_CLASS
 
-FixStyle(memory/volterra,FixMemoryVolterra)
+ComputeStyle(memory/volterra,ComputeMemoryVolterra)
 
 #else
 
-#ifndef LMP_FIX_MEMORY_VOLTERRA_H
-#define LMP_FIX_MEMORY_VOLTERRA_H
+#ifndef LMP_COMPUTE_MEMORY_VOLTERRA_H
+#define LMP_COMPUTE_MEMORY_VOLTERRA_H
 
-#include "stdio.h"
-#include "fix.h"
+#include "compute.h"
 
 namespace LAMMPS_NS {
 
-class FixMemoryVolterra : public Fix {
+class ComputeMemoryVolterra : public Compute {
  public:
-  FixMemoryVolterra(class LAMMPS *, int, char **);
-  ~FixMemoryVolterra();
-  int setmask();
+  ComputeMemoryVolterra(class LAMMPS *, int, char **);
+  ~ComputeMemoryVolterra();
   void init();
-  void setup(int);
-  void end_of_step();
-  double compute_array(int,int);
-  void reset_timestep(bigint);
-  double memory_usage();
-  void grow_arrays(int);
-  void copy_arrays(int, int, int);
+  void compute_array();
+  
+ protected:
+  char *id_fix;
+  class FixAveCorrelatePeratom *fix;
 
  private:
-  int nrepeat,nfreq,nevery_corr;
+  int memory_switch;
+  int nevery,nrepeat,nfreq,nevery_corr;
+  int me;
   
-  double **corr; //used to store correlation
-  double **mem;  //used to memory
-
-  bigint nextvalid();
+  int ncorr,nmem;
+  
+  double mass;
 };
 
 }

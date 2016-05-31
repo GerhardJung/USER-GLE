@@ -122,7 +122,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
     if (strcmp(arg[iarg],"type") == 0) {
       if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       if (strcmp(arg[iarg+1],"auto") == 0) type = AUTO;
-      else if (strcmp(arg[iarg+1],"auto,cross") == 0) type = AUTOCROSS;
+      else if (strcmp(arg[iarg+1],"auto/cross") == 0) type = AUTOCROSS;
       else if (strcmp(arg[iarg+1],"auto/upper") == 0) type = AUTOUPPER;
       else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       iarg += 2;
@@ -277,7 +277,8 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   }
   
   // npair = # of correlation pairs to calculate
-   if (type == AUTO || type == AUTOCROSS) npair = nvalues;
+   if (type == AUTO) npair = nvalues;
+   if (type == AUTOCROSS) npair = 2*nvalues;
    if (type == AUTOUPPER) npair = nvalues*(nvalues+1)/2;
   // print file comment lines
   if (fp && me == 0) {
@@ -768,9 +769,9 @@ void FixAveCorrelatePeratom::end_of_step()
 	  for (k = nsave-1; k > 0; k--) {
 	    double fnm = array[a][(r+nvalues+3)*nsave+m];
 	    double fnmp1 = array[a][(r+nvalues+3)*nsave+mp1];
-	    array[a][(i+nvalues+6)*nsave+k] += alpha[a][r*nvalues+i]*fnm*update->dt/2
-	      +update->dt/2*fnmp1/(1-update->dt/2*kappa[a])
-	      *(epsilon[a][r*nvalues+i]+zeta[a]*alpha[a][r*nvalues+i]*update->dt/2);
+	    array[a][(i+nvalues+6)*nsave+k] += alpha[a][r*nvalues+i]*fnm*update->dt/2.0
+	      +update->dt/2.0*fnmp1/(1-update->dt/2.0*kappa[a])
+	      *(epsilon[a][r*nvalues+i]+zeta[a]*alpha[a][r*nvalues+i]*update->dt/2.0);
 	    m--; mp1--;
 	    if (m < 0) m = nsave-1; if (mp1 < 0) mp1 = nsave-1;
 	  }
@@ -881,10 +882,15 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
     count[t]+=nsave-1;
   }
   
-  if (type == AUTO) { // type = auto -> calculate only self-correlation
+  
     ipair = 0;
     n = lastindex;
     for (i = 0; i < nvalues; i++) {
+      //determine whether just autocorrelation or also mixed correlation
+      double cross0 = 0;
+      if (type == AUTO || AUTOCROSS) cross0 = i+1;
+      if (type == AUTOUPPER) cross0 = nvalues;
+      for (j = i; j < cross0; j++) {
       for (a= 0; a < ngroup_loc; a++) {
 	m = lastindex;
 	int ind;
@@ -897,13 +903,13 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 	}
 	if(dynamics==NORMAL){
 	  for (k = 0; k < nsample; k++) {
-	    local_accum[k]+= array[ind][i * nsave + m]*array[ind][i * nsave + n];
+	    local_accum[k]+= array[ind][i * nsave + m]*array[ind][j * nsave + n];
 	    m--;
 	    if (m < 0) m = nsave-1;
 	  }
 	} else {
 	  for (k = nsave-1; k > 0; k--) {
-	    local_accum[0]+= array[ind][i*nsave+m]*array[ind][(i+nvalues+6)*nsave+k];
+	    local_accum[0]+= array[ind][i*nsave+m]*array[ind][(j+nvalues+6)*nsave+k];
 	    m--;
 	    if (m < 0) m = nsave-1;
 	  }
@@ -924,58 +930,9 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 	local_accum[0] = global_accum[0] = 0;
       }
       ipair++;
-    }
-  } else if (type == AUTOUPPER) {
-    ipair = 0;
-    n = lastindex;
-    for (i = 0; i < nvalues; i++) {
-      for (j = i; j < nvalues; j++) {
-	for (a= 0; a < ngroup_loc; a++) {
-	  m = lastindex;
-	  int ind;
-	  if(memory_switch==PERATOM){
-	    ind=indices_group[a];
-	  } else {
-	    tagint *ids_ptr;
-	    ids_ptr = std::find(group_ids,group_ids+ngroup_glo,tag[indices_group[a]]);
-	    ind = (ids_ptr - group_ids);
-	  }
-	  if(dynamics==NORMAL){
-	    for (k = 0; k < nsample; k++) {
-	      local_accum[k]+= array[ind][i * nsave + m]*array[ind][j * nsave + n];
-	      m--;
-	      if (m < 0) m = nsave-1;
-	    }
-	  } else {
-	    for (k = 0; k < nsave; k++) {
-	      local_accum[0]+= array[ind][(i+nvalues)*nsave+m]*array[ind][j*nsave+nsave-1-k];
-	      m--;
-	      if (m < 0) m = nsave-1;
-	    }
-	  }
-	}
-	// reduce the results from each proc to calculate the global correlation
-	if(dynamics == NORMAL){
-	  MPI_Allreduce(local_accum, global_accum, nsample, MPI_DOUBLE, MPI_SUM, world);
-	  for (k = 0; k < nsample; k++) {
-	    global_accum[k]/= ngroup_glo;
-	    corr[k][ipair]+= global_accum[k];
-	    local_accum[k] = global_accum[k] = 0;
-	  }
-	} else {
-	  MPI_Allreduce(local_accum, global_accum, 1, MPI_DOUBLE, MPI_SUM, world);
-	  global_accum[0]/= ngroup_glo;
-	  corr[t][ipair] += global_accum[0];
-	  local_accum[0] = global_accum[0] = 0;
-	}
-      ipair++;
       }
     }
-  } else {  // type = auto/cross -> calculate cross correlations between particles
-    
-    //TODO
-    
-  }
+
   
   memory->destroy(local_accum);
   memory->destroy(global_accum);

@@ -202,6 +202,11 @@ void ComputeMemoryVolterra::compute_array()
       array[i][j]=num/denum;
     }
   }
+  for (j = 0; j<nmem; j++){
+    for(i = 0; i<nrepeat; i++){
+      array[i][j] *= mass*mass*corr[0][3*j];
+    }
+  }
     
   memory->destroy(corr);
 }

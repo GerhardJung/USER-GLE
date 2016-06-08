@@ -52,11 +52,15 @@ class FixAveCorrelatePeratom : public Fix {
   
   double **array; //used for peratom quantities
 
-  int type,ave,startstep,overwrite, dynamics, memory_switch;
+  int type,ave,startstep,overwrite, dynamics, memory_switch, variable_flag;
   int include_orthogonal;
   double prefactor;
+  int variable_nvalues;
+  int variable_value2index;
+  char *variable_id;
   int bins;		//for variable dependence of the correlation
-  double range_lower,range_upper;
+  double range;
+  double **variable_store;
   char *title1,*title2,*title3;
   long filepos;
 

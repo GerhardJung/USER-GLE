@@ -107,7 +107,7 @@ ComputeMemoryVolterra::ComputeMemoryVolterra(LAMMPS * lmp, int narg, char **arg)
   sprintf(c_nrepeat, "%d", nrepeat);
   sprintf(c_nfreq, "%d", nfreq);
   
-  int narg_corr = 16;
+  int narg_corr = 17;
   if(memory_switch==GLOBAL) narg_corr += 2;
   char **newarg_f = new char*[narg_corr];
   newarg_f[0] = id_fix;
@@ -120,7 +120,8 @@ ComputeMemoryVolterra::ComputeMemoryVolterra(LAMMPS * lmp, int narg, char **arg)
   newarg_f[9] = (char *) "v_fx"; newarg_f[10] = (char *) "v_fy"; newarg_f[11] = (char *) "v_fz";
   newarg_f[12] = (char *) "type"; newarg_f[13] = (char *) "auto/upper";
   newarg_f[14] = (char *) "ave"; newarg_f[15] = (char *) "running";
-  if(memory_switch==GLOBAL) newarg_f[16] = (char *) "switch"; newarg_f[17] = (char *) "global";
+  newarg_f[16] = (char *) "restart";
+  if(memory_switch==GLOBAL) newarg_f[17] = (char *) "switch"; newarg_f[18] = (char *) "global";
   modify->add_fix(narg_corr,newarg_f);
   fix = (FixAveCorrelatePeratom *) modify->fix[modify->nfix-1];
   delete [] newarg_f;

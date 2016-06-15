@@ -40,6 +40,9 @@ class FixAveCorrelatePeratom : public Fix {
   int unpack_exchange(int, double *);
   void grow_arrays(int);
   void copy_arrays(int, int, int);
+  
+  void write_restart(FILE *);
+  void restart(char *);
 
  private:
   int me,nvalues;
@@ -55,12 +58,20 @@ class FixAveCorrelatePeratom : public Fix {
   int type,ave,startstep,overwrite, dynamics, memory_switch, variable_flag;
   int include_orthogonal;
   double prefactor;
-  int variable_nvalues;
+  
+  double **alpha;		//for orthogonal dynamics
+  double **epsilon;
+  double **kappa;
+  double **zeta;
+  double **norm;
+  
+  int variable_nvalues;		//for variable dependence of the correlation
   int variable_value2index;
   char *variable_id;
-  int bins;		//for variable dependence of the correlation
+  int bins;
   double range;
   double **variable_store;
+  
   char *title1,*title2,*title3;
   long filepos;
 
@@ -69,10 +80,10 @@ class FixAveCorrelatePeratom : public Fix {
   int nsample;         // number of time samples in values ring
 
   int npair;           // number of correlation pairs to calculate
-  int *count;
+  double *count;
   double **corr;
    
-  int *save_count;     // saved values at Nfreq for output via compute_array()
+  double *save_count;     // saved values at Nfreq for output via compute_array()
   double **save_corr;
   
   int ngroup_glo;
@@ -82,6 +93,7 @@ class FixAveCorrelatePeratom : public Fix {
 
   void accumulate(int *indices_group, int ngroup_loc);
   bigint nextvalid();
+  int first;
 };
 
 }

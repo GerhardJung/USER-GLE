@@ -42,7 +42,7 @@ using namespace FixConst;
 enum{COMPUTE,FIX,VARIABLE};
 enum{ONE,RUNNING};
 enum{NORMAL,ORTHOGONAL,ORTHOGONALSECOND};
-enum{AUTO,AUTOCROSS,AUTOUPPER};
+enum{AUTO,CROSS,AUTOCROSS,AUTOUPPER};
 enum{PERATOM,GLOBAL};
 enum{NOT_DEPENDENED,VAR_DEPENDENED,DIST_DEPENDENED};
 
@@ -116,6 +116,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   memory_switch = PERATOM;
   include_orthogonal =  0;
   variable_flag = NOT_DEPENDENED;
+  mean_file = NULL;
   variable_nvalues = 0;
   overwrite = 0;
   char *title1 = NULL;
@@ -126,6 +127,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
     if (strcmp(arg[iarg],"type") == 0) {
       if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       if (strcmp(arg[iarg+1],"auto") == 0) type = AUTO;
+      if (strcmp(arg[iarg+1],"cross") == 0) type = CROSS;
       else if (strcmp(arg[iarg+1],"auto/cross") == 0) type = AUTOCROSS;
       else if (strcmp(arg[iarg+1],"auto/upper") == 0) type = AUTOUPPER;
       else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
@@ -197,6 +199,17 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
     } else if (strcmp(arg[iarg],"overwrite") == 0) {
       overwrite = 1;
       iarg += 1;
+    } else if (strcmp(arg[iarg],"mean") == 0) {
+      if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
+      if (me == 0) {
+        mean_file = fopen(arg[iarg+1],"w");
+        if (mean_file == NULL) {
+          char str[128];
+          sprintf(str,"Cannot open fix ave/correlate/peratom file %s",arg[iarg+1]);
+          error->one(FLERR,str);
+        }
+      }
+      iarg += 2;
     } else if (strcmp(arg[iarg],"title1") == 0) {
       if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       delete [] title1;
@@ -241,6 +254,13 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
     nsave = nav;
   } else {
     nsave = nrepeat;
+  }
+  // distance dependence only makes sence when we calculate cross correlation
+  if (variable_flag == DIST_DEPENDENED && type != CROSS){
+    error->all(FLERR,"Illegal fix ave/correlate/peratom command: distance dependence without cross correlation");
+  }
+  if (variable_flag == DIST_DEPENDENED && nvalues % 3) {
+    error->all(FLERR,"Illegal fix ave/correlate/peratom command: distance dependence decomposes 3d-system into parallel and orthogonal component");
   }
 
   int i,j,o;
@@ -299,8 +319,8 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   }
   
   // npair = # of correlation pairs to calculate
-   if (type == AUTO) npair = nvalues;
-   if (type == AUTOCROSS) npair = 2*nvalues;
+   if (type == AUTO || type == CROSS || type == AUTOCROSS) npair = nvalues;
+   if (variable_flag == DIST_DEPENDENED) npair /= 3;
    if (type == AUTOUPPER) npair = nvalues*(nvalues+1)/2;
   // print file comment lines
   if (fp && me == 0) {
@@ -311,7 +331,19 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
     if (title3) fprintf(fp,"%s\n",title3);
     else {
       fprintf(fp,"# Index TimeDelta Ncount");
-      if (type == AUTO || type == AUTOCROSS)
+      if (variable_flag == DIST_DEPENDENED)
+	for (i = 0; i < nvalues ; i+=3){
+	  int n = strlen(arg[6+i])+strlen("_p");
+	  char *str1 = new char[n];
+	  char *str2 = new char[n];
+	  strncpy(str1, arg[6+i], strlen(arg[6+i])-1);
+	  strncpy(str2, arg[6+i], strlen(arg[6+i])-1);
+	  strcat(str1,"_p");
+	  strcat(str2,"_o");
+          fprintf(fp," %s*%s",str1,str1);
+	  fprintf(fp," %s*%s",str2,str2);
+	}
+      if (type == AUTO || type == AUTOCROSS || type == CROSS )
         for (i = 0; i < nvalues ; i++)
           fprintf(fp," %s*%s",arg[6+i],arg[6+i]);
       else if (type == AUTOUPPER)
@@ -332,37 +364,64 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   // allocate and initialize memory for averaging
   // set count and corr to zero since they accumulate
   // also set save versions to zero in case accessed via compute_array()
-
-  //printf("variable_flag=%d, bins=%d\n",variable_flag,bins);
-  if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED){
-    memory->create(count,nrepeat*bins,"ave/correlate/peratom:count");
-    memory->create(save_count,nrepeat*bins,"ave/correlate/peratom:save_count");
-    memory->create(corr,nrepeat*bins,npair,"ave/correlate/peratom:corr");
-    memory->create(save_corr,nrepeat*bins,npair,"ave/correlate/peratom:save_corr"); 
-    
-    for (i = 0; i < nrepeat; i++) {
-      for(o = 0; o < bins; o++){
-	save_count[bins*i+o] = count[bins*i+o] =  0.0;
-	for (j = 0; j < npair; j++) save_corr[bins*i+o][j] = corr[bins*i+o][j] = 0.0;
-      }
+  int corr_bins = 1;
+  if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED) corr_bins = bins;
+  corr_factor = 1;
+  if(type==AUTOCROSS || variable_flag == DIST_DEPENDENED) corr_factor = 2;
+  corr_length = nrepeat*corr_bins*corr_factor;
+  memory->create(count,corr_length,"ave/correlate/peratom:count");
+  memory->create(save_count,corr_length,"ave/correlate/peratom:save_count");
+  memory->create(corr,corr_length,npair,"ave/correlate/peratom:corr");
+  memory->create(save_corr,corr_length,npair,"ave/correlate/peratom:save_corr"); 
+  for (i = 0; i < corr_length; i++) {
+    save_count[i] = count[i] =  0.0;
+    for (j = 0; j < npair; j++) save_corr[i][j] = corr[i][j] = 0.0;
+  }
+  
+  if (mean_file) {
+    // create file
+    if (me == 0) {
+      fprintf(fp,"# Time-averaged data for fix %s\n",id);
+      fprintf(fp,"# Index Ncount");
+      if (variable_flag == DIST_DEPENDENED)
+	for (i = 0; i < nvalues ; i+=3){
+	  int n = strlen(arg[6+i])+strlen("_p");
+	  char *str1 = new char[n];
+	  char *str2 = new char[n];
+	  strncpy(str1, arg[6+i], strlen(arg[6+i])-1);
+	  strncpy(str2, arg[6+i], strlen(arg[6+i])-1);
+	  strcat(str1,"_p");
+	  strcat(str2,"_o");
+          fprintf(fp," %s*%s",str1,str1);
+	  fprintf(fp," %s*%s",str2,str2);
+	}
+      else for (i = 0; i < nvalues ; i++) fprintf(fp," %s*%s",arg[6+i],arg[6+i]);
+      fprintf(fp,"\n");
+      mean_filepos = ftell(mean_file);
     }
-  } else {
-    memory->create(count,nrepeat,"ave/correlate/peratom:count");
-    memory->create(save_count,nrepeat,"ave/correlate/peratom:save_count");
-    memory->create(corr,nrepeat,npair,"ave/correlate/peratom:corr");
-    memory->create(save_corr,nrepeat,npair,"ave/correlate/peratom:save_corr"); 
-    
-    for (i = 0; i < nrepeat; i++) {
-      save_count[i] = count[i] =  0.0;
-      for (j = 0; j < npair; j++) save_corr[i][j] = corr[i][j] = 0.0;
+ 
+    // init memory
+    if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED){
+      memory->create(mean,nvalues*bins,"ave/correlate/peratom:mean");
+      memory->create(mean_count,nvalues*bins,"ave/correlate/peratom:mean_count");
+      for (i = 0; i < nvalues; i++) {
+	for(o = 0; o < bins; o++){
+	  mean[i*bins+o]=0.0;
+	}
+	mean_count[o]=0.0;
+      }
+    } else {
+      memory->create(mean,nvalues,"ave/correlate/peratom:mean");
+      memory->create(mean_count,1,"ave/correlate/peratom:mean_count");
+      for (i = 0; i < nvalues; i++) {
+	mean[i]=0.0;
+      }
+      mean_count[0]=0.0;
     }
   }
   
-  
-  
 
   // this fix produces a global array
-
   array_flag = 1;
   if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED) size_array_rows = nrepeat*bins;
   else size_array_rows = nrepeat;
@@ -399,7 +458,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   MPI_Allreduce(&ngroup_loc, &ngroup_glo, 1, MPI_INT, MPI_SUM, world);
   MPI_Exscan(&ngroup_loc,&ngroup_scan,1,MPI_INT, MPI_SUM, world);
   //printf("local=%d, scan=%d, global=%d\n",ngroup_loc,ngroup_scan,ngroup_glo);
-  if(type == AUTOCROSS && ngroup_glo < 2) error->all(FLERR,"Illegal fix ave/correlate/peratom command: Cross-correlation with only one particle");
+  if((type == AUTOCROSS || type == CROSS) && ngroup_glo < 2) error->all(FLERR,"Illegal fix ave/correlate/peratom command: Cross-correlation with only one particle");
   array= NULL;
   variable_store=NULL;
   if(nvalues > 0) {
@@ -580,7 +639,6 @@ void FixAveCorrelatePeratom::end_of_step()
   int nlocal= atom->nlocal;
   int *mask= atom->mask;  
   double *mass = atom->mass;
-  int *type = atom->type;
   tagint *tag = atom->tag;
   
   //printf("nsample = %d, lastindex = %d, nvalid = %d\n",nsample,lastindex,nvalid);
@@ -889,6 +947,9 @@ void FixAveCorrelatePeratom::end_of_step()
     //accumulate
     accumulate(indices_group, ngroup_loc);
   }
+  
+  //calculate mean
+  if (mean_file) calc_mean(indices_group, ngroup_loc);
     
   if (ntimestep % nfreq || first) {
     first = 0;
@@ -896,218 +957,154 @@ void FixAveCorrelatePeratom::end_of_step()
     return;
   }
   
-  if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED){
-    // save results in save_count and save_corr
-    for (i = 0; i < nrepeat; i++) {
-      for (o = 0; o < bins; o++) {
-	int offset=i*bins+o;
-	save_count[offset] = count[offset];
-	if (count[offset])
-	  for (j = 0; j < npair; j++)
-	    save_corr[offset][j] = prefactor*corr[offset][j]/count[offset];
-	else
-	  for (j = 0; j < npair; j++)
-	    save_corr[offset][j] = 0.0;
-      }
-    }
-    
-    // output result to file
-  
-    if (fp && me == 0) {
-      if (overwrite) fseek(fp,filepos,SEEK_SET);
-      fprintf(fp,BIGINT_FORMAT " %d\n",ntimestep,nrepeat);
-      for (i = 0; i < nrepeat; i++) {
-	for (o = 0; o < bins; o++) {
-	  int offset = i*bins+o;
-	  fprintf(fp,"%d %d %f %f",i+1,i*nevery,count[offset],range/bins*o);
-	  if (count[offset])
-	    for (j = 0; j < npair; j++)
-	      fprintf(fp," %g",prefactor*corr[offset][j]/count[offset]);
-	  else
-	    for (j = 0; j < npair; j++)
-	      fprintf(fp," 0.0");
-	  fprintf(fp,"\n");
-	}
-      }
-      fflush(fp);
-      if (overwrite) {
-	long fileend = ftell(fp);
-	ftruncate(fileno(fp),fileend);
-      }
-    }
-    
-    // zero accumulation if requested
-    // recalculate Cij(0)
-    if(dynamics==NORMAL){
-      if (ave == ONE) {
-	for (i = 0; i < nrepeat; i++) {
-	  for (o = 0; o < bins; o++) {
-	    int offset = i*bins+o;
-	    count[offset] = 0.0;
-	    for (j = 0; j < npair; j++)
-	      corr[offset][j] = 0.0;
-	  }
-	}
-      }
-      nsample = 1;
-      lastindex  = 0;
-      if(ntimestep != update->nsteps) accumulate(indices_group, ngroup_loc);
+  // save results in save_count and save_corr
+  for (i = 0; i < corr_length; i++) {
+    save_count[i] = count[i];
+    if (count[i]) {
+      for (j = 0; j < npair; j++)
+	save_corr[i][j] = prefactor*corr[i][j]/count[i];
     } else {
-      nsample = 0;
-      lastindex = -1;
-      if (ave == ONE) {
-	for (i = 0; i < nrepeat; i++) {
-	  for (o = 0; o < bins; o++) {
-	    int offset = i*bins+o;
-	    count[offset] = 0.0;
-	    for (j = 0; j < npair; j++)
-	      corr[offset][j] = 0.0;
-	  }
-	}
-      }
+      for (j = 0; j < npair; j++)
+	save_corr[i][j] = 0.0;
     }
+  }
     
-  } else {
-    // save results in save_count and save_corr
-    for (i = 0; i < nrepeat; i++) {
-      save_count[i] = count[i];
-      if (count[i])
-	for (j = 0; j < npair; j++)
-	  save_corr[i][j] = prefactor*corr[i][j]/count[i];
-      else
-	for (j = 0; j < npair; j++)
-	  save_corr[i][j] = 0.0;
-    }
-
-    // output result to file
-  
-    if (fp && me == 0) {
-      if (overwrite) fseek(fp,filepos,SEEK_SET);
-      fprintf(fp,BIGINT_FORMAT " %d\n",ntimestep,nrepeat);
-      for (i = 0; i < nrepeat; i++) {
+  // output result to file
+  if (fp && me == 0) {
+    if (overwrite) fseek(fp,filepos,SEEK_SET);
+    fprintf(fp,BIGINT_FORMAT " %d\n",ntimestep,nrepeat);
+    for (i = 0; i < corr_length/corr_factor; i++) {
+      if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED) {
+	int loc_bin = i%nrepeat;
+	int loc_ind = (i - loc_bin)/nrepeat;
+	fprintf(fp,"%d %d %f %f",loc_ind+1,loc_ind*nevery,range/bins*loc_bin,count[i]);
+      } else {
 	fprintf(fp,"%d %d %f",i+1,i*nevery,count[i]);
-	if (count[i])
+      }
+      if (count[i]) {
 	  for (j = 0; j < npair; j++)
 	    fprintf(fp," %g",prefactor*corr[i][j]/count[i]);
-	else
+      } else {
+	    for (j = 0; j < npair; j++)
+	      fprintf(fp," 0.0");
+      }
+      if (type == AUTOCROSS || variable_flag == DIST_DEPENDENED) {
+	int offset = i + corr_length/2;
+	if (type == AUTOCROSS)
+	  fprintf(fp," %f",count[offset]);
+	if (count[offset]) {
+	  for (j = 0; j < npair; j++)
+	    fprintf(fp," %g",prefactor*corr[offset][j]/count[offset]);
+	} else {
 	  for (j = 0; j < npair; j++)
 	    fprintf(fp," 0.0");
-	fprintf(fp,"\n");
+	}
       }
-      fflush(fp);
-      if (overwrite) {
-	long fileend = ftell(fp);
-	ftruncate(fileno(fp),fileend);
-      }
+      fprintf(fp,"\n");
     }
-
-    // zero accumulation if requested
-    // recalculate Cij(0)
-    if(dynamics==NORMAL){
-      if (ave == ONE) {
-	for (i = 0; i < nrepeat; i++) {
-	  count[i] = 0.0;
-	  for (j = 0; j < npair; j++)
-	    corr[i][j] = 0.0;
-	}
-      }
-      nsample = 1;
-      lastindex  = 0;
-      if(ntimestep != update->nsteps) accumulate(indices_group, ngroup_loc);
-    } else {
-      nsample = 0;
-      lastindex = -1;
-      if (ave == ONE) {
-	for (i = 0; i < nrepeat; i++) {
-	  count[i] = 0.0;
-	  for (j = 0; j < npair; j++)
-	    corr[i][j] = 0.0;
-	}
+    fflush(fp);
+    if (overwrite) {
+      long fileend = ftell(fp);
+      ftruncate(fileno(fp),fileend);
+    }
+  }
+    
+        
+  // output mean result to file
+  if (mean_file && me == 0) { //TODO
+    if (overwrite) fseek(mean_file,mean_filepos,SEEK_SET);
+    for (o = 0; o < bins; o++) {
+      fprintf(mean_file,"%f %f",count[o],range/bins*o);
+      if (count[o])
+	for (j = 0; j < nvalues; j++)
+	  fprintf(mean_file," %g",mean[j*bins+o]/mean_count[o]);
+      else
+	for (j = 0; j < nvalues; j++)
+	  fprintf(mean_file," 0.0");
+      fprintf(mean_file,"\n");
+    }
+    fflush(mean_file);
+    if (overwrite) {
+      long fileend = ftell(mean_file);
+      ftruncate(fileno(mean_file),fileend);
+    }
+  }
+    
+  // zero accumulation if requested
+  // recalculate Cij(0)
+  if (ave == ONE) {
+    for (i = 0; i < corr_length; i++) {
+      count[i] = 0.0;
+      for (j = 0; j < npair; j++)
+	corr[i][j] = 0.0;
+    }
+    if (mean_file) { //TODO
+      for (i = 0; i < corr_length; i++) {
+	mean_count[o] = 0.0;
+	mean[i*bins + o] = 0.0;
       }
     }
   }
-  
+  nsample = 1;
+  lastindex  = 0;
+  if(ntimestep != update->nsteps && dynamics == NORMAL) accumulate(indices_group, ngroup_loc); 
+
   memory->destroy(indices_group);
 }
 
 /* ----------------------------------------------------------------------
    accumulate correlation data using more recently added values
 ------------------------------------------------------------------------- */
-
 void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 {
   int a,b,i,j,k,o,m,n,ipair;
   int t = nsample - nsave;
   int nlocal= atom->nlocal;
   tagint *tag = atom->tag;
+  
+  // create local memory for accumulation and reduction
   double *local_accum;
   double *global_accum;
-  int accum_cross_factor = 1;
+  int accum_nsample = nsample;
+  if (dynamics == ORTHOGONAL) accum_nsample = 1;
+  int accum_bins = 1;
+  if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED) accum_bins = bins;
+  int accum_factor = 1;
+  if(type==AUTOCROSS || variable_flag == DIST_DEPENDENED) accum_factor = 2;
+  int accum_length = accum_nsample*accum_bins*accum_factor;
   
-  if(type==AUTOCROSS) accum_cross_factor = 2;
-
-  if(dynamics == NORMAL){
-    if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED){
-      memory->create(local_accum,nsample*accum_cross_factor*bins,"ave/correlate/peratom:local_accum");
-      memory->create(global_accum,nsample*accum_cross_factor*bins,"ave/correlate/peratom:global_accum");
-      for (k = 0; k < nsample*accum_cross_factor; k++){
-	for (o = 0; o < bins; o++){
-	  int offset = k*bins+o;
-	  local_accum[offset] = global_accum[offset] = 0;
-	}
-      }
-    } else {
-      memory->create(local_accum,nsample*accum_cross_factor,"ave/correlate/peratom:local_accum");
-      memory->create(global_accum,nsample*accum_cross_factor,"ave/correlate/peratom:global_accum");
-      for (k = 0; k < nsample*accum_cross_factor; k++){
-	local_accum[k] = global_accum[k] = 0;
-      }
-      for (k = 0; k < nsample; k++){
-	count[k]+=1.0;
-      }
-    }
-  } else {
-    if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED){
-      memory->create(local_accum,accum_cross_factor*bins,"ave/correlate/peratom:local_accum");
-      memory->create(global_accum,accum_cross_factor*bins,"ave/correlate/peratom:global_accum");
-      for (k = 0; k < accum_cross_factor; k++){
-	for (o = 0; o < bins; o++){
-	  int offset = i*bins+o;
-	  local_accum[offset] = global_accum[offset] = 0;
-	}
-      }
-    } else {
-      memory->create(local_accum,accum_cross_factor,"ave/correlate/peratom:local_accum");
-      memory->create(global_accum,accum_cross_factor,"ave/correlate/peratom:global_accum");
-      for (k = 0; k < accum_cross_factor; k++){
-	local_accum[k] = global_accum[k] = 0;
-      }
-      count[t]+=nsave-1;
-    }
+  memory->create (local_accum, accum_length,"ave/correlate/peratom:local_accum");
+  memory->create (global_accum, accum_length,"ave/correlate/peratom:global_accum");
+  for (k = 0; k < accum_length; k++){
+    local_accum[k] = global_accum[k] = 0.0;
   }
   
-  
-  ipair = 0;
+  // accumulate
   n = lastindex;
-  for (i = 0; i < nvalues; i++) {
+  ipair = 0;
+  int incr_ipair = 1;
+  int incr_nvalues = 1;
+  if (variable_flag == DIST_DEPENDENED){ 
+    incr_ipair = 2;
+    incr_nvalues = 3;
+  }
+  
+  for (i = 0; i < nvalues; i+=incr_nvalues) {
     //determine whether just autocorrelation or also mixed correlation (different observables)
-    double upper = 0;
-    if (type == AUTO || AUTOCROSS) upper = i+1;
-    if (type == AUTOUPPER) upper = nvalues;
-    for (j = i; j < upper; j++) {
+    double nvalues_upper = i+1;
+    if (type == AUTOUPPER) nvalues_upper = nvalues;
+    for (j = i; j < nvalues_upper; j++) {
+      
       for (a= 0; a < ngroup_loc; a++) {
 	//determine whether just autocorrelation or also cross correlation (different atoms)
-	double cross_lower = 0;
-	double cross_upper = 0;
-	if (type == AUTO || AUTOUPPER){
-	  cross_lower = a;
-	  cross_upper = a+1;
+	double ngroup_lower = a;
+	double ngroup_upper = a+1;
+	if (type == AUTOCROSS || type == CROSS){
+	  ngroup_lower = a;
+	  ngroup_upper = ngroup_loc;
 	}
-	if (type == AUTOCROSS){
-	  cross_lower = 0;
-	  cross_upper = ngroup_loc;
-	}
-	for (b = cross_lower; b < cross_upper; b++) {
+	for (b = ngroup_lower; b < ngroup_upper; b++) {
+	  if (type == CROSS && a==b) continue;
 	  m = lastindex;
 	  int inda,indb;
 	  if(memory_switch==PERATOM){
@@ -1122,33 +1119,51 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 	  }
 	  if(dynamics==NORMAL){
 	    for (k = 0; k < nsample; k++) {
-	      if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED){
-		double dV;
-		if (variable_flag == VAR_DEPENDENED) {
-		  dV = variable_store[inda][m] - variable_store[indb][n];
-		} else {
-		  double x = variable_store[inda][m] - variable_store[indb][n];
-		  double y = variable_store[inda][m+nsave] - variable_store[indb][n+nsave];
-		  double z = variable_store[inda][m+2*nsave] - variable_store[indb][n+2*nsave];
-		  dV = sqrt(x*x+y*y+z*z);
-		}
+	      if (variable_flag == VAR_DEPENDENED){
+		double dV = variable_store[inda][m] - variable_store[indb][n];
 		dV=fabs(dV);
 		if(dV<range){
 		  int ind = dV/range*bins;
 		  int offset= k*bins+ind;
 		  //count once
-		  if(i==0) count[offset]+=1.0;
+		  
 		  if (type == AUTOCROSS && b!=a) {
-		    int offset_cross= (k+nsample)*bins+ind;
-		    local_accum[offset_cross] += array[inda][i * nsave + m]*array[indb][j * nsave + n];
+		    if(i==0&&j==0) count[offset+corr_length/2]+=1.0;
+		    local_accum[offset+accum_length/2] += array[inda][i * nsave + m]*array[indb][j * nsave + n];
 		  } else {
+		    if(i==0&&j==0) count[offset]+=1.0;
 		    local_accum[offset]+=array[inda][i * nsave + m]*array[indb][j * nsave + n];
 		  }
 		}
+	      } else if (variable_flag == DIST_DEPENDENED) {
+		double *dr = new double[3];
+		dr[0] = variable_store[inda][m] - variable_store[indb][n];
+		dr[1] = variable_store[inda][m+nsave] - variable_store[indb][n+nsave];
+		dr[2] = variable_store[inda][m+2*nsave] - variable_store[indb][n+2*nsave];
+		double dV = sqrt( dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2]);
+		//printf("dV=%f\n",dV);
+		if(dV<range){
+		  double *res_data = new double[8];
+		  double *inp_data = new double[6];
+		  int p;
+		  for (p=0; p<3; p++) inp_data[p] = array[inda][ (i+p) * nsave + m];
+		  for (p=0; p<3; p++) inp_data[p+3] = array[indb][ (j+p) * nsave + n];
+		  decompose(res_data,dr,inp_data);
+		  //for (int z=0; z<8; z++) printf("res_data[%d]=%f\n",z,res_data[z]);
+		  // calculate correlation
+		  int ind = dV/range*bins;
+		  int offset= k*bins+ind;
+		  if(i==0&&j==0) count[offset]+=1.0;
+		  local_accum[offset] += res_data[0]*res_data[1];
+		  if(i==0&&j==0) count[offset+corr_length/2]+=1.0;
+		  local_accum[offset+accum_length/2] += res_data[2]*res_data[5]+res_data[3]*res_data[6]+res_data[4]*res_data[7];
+		}
 	      } else {
 		if (type == AUTOCROSS && b!=a) {
-		  local_accum[k+nsample] += array[inda][i * nsave + m]*array[indb][j * nsave + n];
+		  if(i==0&&j==0) count[k+corr_length/2]+=1.0;
+		  local_accum[k+accum_length/2] += array[inda][i * nsave + m]*array[indb][j * nsave + n];
 		} else {
+		  if(i==0&&j==0) count[k]+=1.0;
 		  local_accum[k]+= array[inda][i * nsave + m]*array[indb][j * nsave + n];
 		}
 	      }
@@ -1161,8 +1176,10 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 		//TODO
 	      } else {
 		if (type == AUTOCROSS && b!=a) {
+		  if(i==0&&j==0) count[t+corr_length/2]+=1.0;
 		  local_accum[1] +=  array[inda][i*nsave+m]*array[indb][(j+nvalues+6)*nsave+k];
 		} else {
+		  if(i==0&&j==0) count[t]+=1.0;
 		  local_accum[0]+= array[inda][i*nsave+m]*array[indb][(j+nvalues+6)*nsave+k];
 		}
 	      }
@@ -1172,52 +1189,32 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 	  }
 	}
       }
+
       // reduce the results from each proc to calculate the global correlation
-      if(dynamics == NORMAL){
-	if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED){
-	  MPI_Allreduce(local_accum, global_accum, nsample*accum_cross_factor*bins, MPI_DOUBLE, MPI_SUM, world);
-	  for (k = 0; k < nsample; k++) {
-	    for (o = 0; o < bins; o++) {
-	      int offset = k*bins+o;
-	      corr[offset][ipair]+= global_accum[offset];
-	      local_accum[offset] = global_accum[offset] = 0;
-	      if (type == AUTOCROSS) {
-		corr[offset][ipair+npair/2]+= global_accum[offset+nsample*bins];
-		//printf("corr[%d]+=%f %f\n",ipair+npair/2, global_accum[k+nsample],local_accum[k+nsample]);
-		local_accum[offset+nsample*bins] = global_accum[offset+nsample*bins] = 0;
-	      }
-	    }
-	  }
-	} else {
-	  MPI_Allreduce(local_accum, global_accum, nsample*accum_cross_factor, MPI_DOUBLE, MPI_SUM, world);
-	  for (k = 0; k < nsample; k++) {
-	    global_accum[k]/= ngroup_glo;
-	    corr[k][ipair]+= global_accum[k];
-	    local_accum[k] = global_accum[k] = 0;
-	    if (type == AUTOCROSS) {
-	      global_accum[k+nsample]/= ngroup_glo*(ngroup_glo-1);
-	      corr[k][ipair+npair/2]+= global_accum[k+nsample];
-	      //printf("corr[%d]+=%f %f\n",ipair+npair/2, global_accum[k+nsample],local_accum[k+nsample]);
-	      local_accum[k+nsample] = global_accum[k+nsample] = 0;
+      MPI_Allreduce(local_accum, global_accum, accum_length, MPI_DOUBLE, MPI_SUM, world);
+      if (dynamics == NORMAL) {
+	for (k = 0; k < accum_nsample; k++) {
+	  for (o = 0; o < accum_bins; o++) {
+	    int offset = k*accum_bins+o;
+	    //printf("offset=%d, ipair=%d, nrepeat=%d, npair=%d\n",offset,ipair,nrepeat, npair);
+	    corr[offset][ipair]+= global_accum[offset];
+	    local_accum[offset] = global_accum[offset] = 0.0;
+	    if (type == AUTOCROSS || variable_flag == DIST_DEPENDENED) {
+	      //printf("%d %d %f\n",offset+corr_length/2,ipair,corr[offset+corr_length/2][ipair]);
+	      corr[offset+corr_length/2][ipair]+= global_accum[offset+accum_length/2];
+	      local_accum[offset+accum_length/2] = global_accum[offset+accum_length/2] = 0.0;
 	    }
 	  }
 	}
       } else {
-	if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED){
-	  //TODO
-	} else {
-	  MPI_Allreduce(local_accum, global_accum, accum_cross_factor, MPI_DOUBLE, MPI_SUM, world);
-	  global_accum[0]/= ngroup_glo;
-	  corr[t][ipair] += global_accum[0];
-	  local_accum[0] = global_accum[0] = 0;
-	  if (type == AUTOCROSS) {
-	    global_accum[1]/= ngroup_glo*(ngroup_glo-1);
-	    corr[t][ipair+npair/2] += global_accum[1];
-	    local_accum[1] = global_accum[1] = 0;
-	  }
+	corr[t][ipair] += global_accum[0];
+	local_accum[0] = global_accum[0] = 0.0;
+	if (type == AUTOCROSS || variable_flag == DIST_DEPENDENED) {
+	  corr[t+corr_length/2][ipair] += global_accum[1];
+	  local_accum[1] = global_accum[1] = 0.0;
 	}
       }
-      ipair++;
+      ipair+=incr_ipair;
     }
   }
 
@@ -1225,6 +1222,72 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
   memory->destroy(local_accum);
   memory->destroy(global_accum);
 
+}
+
+/* ----------------------------------------------------------------------
+   decompose the variables into a parallel and an orthogonal component
+------------------------------------------------------------------------- */
+void FixAveCorrelatePeratom::decompose(double *res_data, double *dr, double *inp_data) {
+  double proj1 = inp_data[0]*dr[0] + inp_data[1]*dr[1] + inp_data[2]*dr[2];
+  double proj2 = inp_data[3]*dr[0] + inp_data[4]*dr[1] + inp_data[5]*dr[2];
+  double dr2 = dr[0]*dr[0] + dr[1]*dr[1] +dr[2]*dr[2];
+  proj1 /= dr2;
+  proj2 /= dr2;
+  double *F1_p = new double[3];
+  double *F2_p = new double[3];
+  int p;
+  for (p=0; p<3; p++){
+    F1_p[p] = proj1*dr[p];
+    F2_p[p] = proj2*dr[p];
+  }
+  // parallel components
+  res_data[0] = sqrt( F1_p[0]*F1_p[0] + F1_p[1]*F1_p[1] + F1_p[2]*F1_p[2] );
+  res_data[1] = sqrt( F2_p[0]*F2_p[0] + F2_p[1]*F2_p[1] + F2_p[2]*F2_p[2] );
+  // orthogonal components
+  for (p=0; p<3; p++){
+    res_data[2+p] = inp_data[p] - F1_p[p];
+    res_data[5+p] = inp_data[3+p] - F2_p[p];
+  }
+
+  //if(res_data[0]==0.0){
+  //  printf("dr[0]=%f, dr[0]=%f, dr[0]=%f, inp_data[0]=%f, inp_data[1]=%f, inp_data[2]=%f\n",dr[0],dr[1],dr[2],inp_data[0],inp_data[1],inp_data[2]);
+  //}
+}
+
+/* ----------------------------------------------------------------------
+   calculate mean values using more recently added values
+------------------------------------------------------------------------- */
+void FixAveCorrelatePeratom::calc_mean(int *indices_group, int ngroup_loc){ //TODO
+  int a,b,i;
+  tagint *tag = atom->tag;
+  
+  for (i = 0; i < nvalues; i++) {
+    for (a= 0; a < ngroup_loc; a++) {
+      //determine whether just autocorrelation or also cross correlation (different atoms)
+      double ngroup_lower = a;
+      double ngroup_upper = a+1;
+      if (type == AUTOCROSS){
+	ngroup_lower = 0;
+	ngroup_upper = ngroup_loc;
+      }
+      for (b = ngroup_lower; b < ngroup_upper; b++) {
+	int inda,indb;
+	if(memory_switch==PERATOM){
+	  inda=indices_group[a];
+	  indb=indices_group[b];
+	} else {
+	  tagint *ids_ptr;
+	  ids_ptr = std::find(group_ids,group_ids+ngroup_glo,tag[indices_group[a]]);
+	  inda = (ids_ptr - group_ids);
+	  ids_ptr = std::find(group_ids,group_ids+ngroup_glo,tag[indices_group[b]]);
+	  indb = (ids_ptr - group_ids);
+	}
+	
+	  
+      }
+    }
+  }
+  
 }
 
 /* ----------------------------------------------------------------------
@@ -1395,18 +1458,10 @@ void FixAveCorrelatePeratom::copy_arrays(int i, int j, int delflag) {
 ------------------------------------------------------------------------- */
 void FixAveCorrelatePeratom::write_restart(FILE *fp){
   // calculate size of array
-  int n = 0;
-  int n_save_count = 0;
-  int n_save_corr = 0;
+  int ncount = corr_length;
+  int ncorr = corr_length*npair;
   // count and correlation
-  if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED){
-    n_save_count = nrepeat*bins;
-    n_save_corr = nrepeat*bins*npair; 
-  } else {
-    n_save_count = nrepeat;
-    n_save_corr = nrepeat*npair; 
-  }
-  n += n_save_corr+n_save_count;
+  int n = ncount+ ncorr;
   // orth. dynamics
   if (dynamics == ORTHOGONAL || dynamics == ORTHOGONALSECOND){
     n += 3*nrepeat * (1 + nvalues) * ngroup_glo;
@@ -1420,8 +1475,8 @@ void FixAveCorrelatePeratom::write_restart(FILE *fp){
     int size = n * sizeof(double);
     fwrite(&size,sizeof(int),1,fp);
     // count and correlation
-    fwrite(count,sizeof(double),n_save_count,fp);
-    fwrite(&corr[0][0],sizeof(double),n_save_corr,fp);
+    fwrite(count,sizeof(double),ncount,fp);
+    fwrite(&corr[0][0],sizeof(double),ncorr,fp);
     // orth. dynamics
     if (dynamics == ORTHOGONAL || dynamics == ORTHOGONALSECOND){
       fwrite(&alpha[0][0],sizeof(double),3*nrepeat*nvalues*ngroup_glo,fp);
@@ -1446,22 +1501,11 @@ void FixAveCorrelatePeratom::restart(char *buf){
   int i,j,o, a, t, r;
   int dcount = 0;
   // count + correlation
-  if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED){
-    for (i = 0; i < nrepeat; i++)
-      for(o = 0; o < bins; o++) count[bins*i+o] = dbuf[dcount++];
+ 
+  for (i = 0; i < corr_length; i++) count[i] = dbuf[dcount++];
 
-      
-    for (i = 0; i < nrepeat; i++)
-      for(o = 0; o < bins; o++)
-	for (j = 0; j < npair; j++) corr[bins*i+o][j] = dbuf[dcount++];
-
-  } else {
-    for (i = 0; i < nrepeat; i++) count[i] = dbuf[dcount++];
-
-    for (i = 0; i < nrepeat; i++) 
-      for (j = 0; j < npair; j++) corr[i][j] = dbuf[dcount++];
-
-  }
+  for (i = 0; i < corr_length; i++)
+	for (j = 0; j < npair; j++) corr[i][j] = dbuf[dcount++];
 
   // orth. dynamics
   if (dynamics == ORTHOGONAL || dynamics == ORTHOGONALSECOND){

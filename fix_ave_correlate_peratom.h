@@ -69,6 +69,7 @@ class FixAveCorrelatePeratom : public Fix {
   int variable_value2index;
   char *variable_id;
   int bins;
+  int factor;
   double range;
   double **variable_store;
   
@@ -88,7 +89,6 @@ class FixAveCorrelatePeratom : public Fix {
   double *count;
   double **corr;
   int corr_length;
-  int corr_factor;
    
   double *save_count;     // saved values at Nfreq for output via compute_array()
   double **save_corr;
@@ -103,6 +103,8 @@ class FixAveCorrelatePeratom : public Fix {
   void calc_mean(int *indices_group, int ngroup_loc);
   void decompose(double *res_data, double *dr, double *inp_data);
   int first;
+  
+  template <typename T> int sgn(T val);
 };
 
 }

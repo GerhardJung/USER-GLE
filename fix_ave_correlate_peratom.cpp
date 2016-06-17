@@ -116,6 +116,8 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   memory_switch = PERATOM;
   include_orthogonal =  0;
   variable_flag = NOT_DEPENDENED;
+  bins = 1;
+  factor = 1;
   mean_file = NULL;
   variable_nvalues = 0;
   overwrite = 0;
@@ -128,8 +130,10 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
       if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       if (strcmp(arg[iarg+1],"auto") == 0) type = AUTO;
       if (strcmp(arg[iarg+1],"cross") == 0) type = CROSS;
-      else if (strcmp(arg[iarg+1],"auto/cross") == 0) type = AUTOCROSS;
-      else if (strcmp(arg[iarg+1],"auto/upper") == 0) type = AUTOUPPER;
+      else if (strcmp(arg[iarg+1],"auto/cross") == 0){ 
+	type = AUTOCROSS;
+	factor = 2;
+      } else if (strcmp(arg[iarg+1],"auto/upper") == 0) type = AUTOUPPER;
       else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       iarg += 2;
     } else if (strcmp(arg[iarg],"ave") == 0) {
@@ -170,6 +174,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
 	strcpy(variable_id,suffix);
 	delete [] suffix;
       } else if (strcmp(arg[iarg+1],"distance") == 0) {
+	factor = 2;
 	variable_flag = DIST_DEPENDENED;
 	variable_nvalues = 3;
       } else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
@@ -364,11 +369,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   // allocate and initialize memory for averaging
   // set count and corr to zero since they accumulate
   // also set save versions to zero in case accessed via compute_array()
-  int corr_bins = 1;
-  if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED) corr_bins = bins;
-  corr_factor = 1;
-  if(type==AUTOCROSS || variable_flag == DIST_DEPENDENED) corr_factor = 2;
-  corr_length = nrepeat*corr_bins*corr_factor;
+  corr_length = nrepeat*bins*factor;
   memory->create(count,corr_length,"ave/correlate/peratom:count");
   memory->create(save_count,corr_length,"ave/correlate/peratom:save_count");
   memory->create(corr,corr_length,npair,"ave/correlate/peratom:corr");
@@ -381,8 +382,8 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   if (mean_file) {
     // create file
     if (me == 0) {
-      fprintf(fp,"# Time-averaged data for fix %s\n",id);
-      fprintf(fp,"# Index Ncount");
+      fprintf(mean_file,"# Time-averaged data for fix %s\n",id);
+      fprintf(mean_file,"# Index Ncount");
       if (variable_flag == DIST_DEPENDENED)
 	for (i = 0; i < nvalues ; i+=3){
 	  int n = strlen(arg[6+i])+strlen("_p");
@@ -392,31 +393,22 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
 	  strncpy(str2, arg[6+i], strlen(arg[6+i])-1);
 	  strcat(str1,"_p");
 	  strcat(str2,"_o");
-          fprintf(fp," %s*%s",str1,str1);
-	  fprintf(fp," %s*%s",str2,str2);
+          fprintf(mean_file," %s*%s",str1,str1);
+	  fprintf(mean_file," %s*%s",str2,str2);
 	}
-      else for (i = 0; i < nvalues ; i++) fprintf(fp," %s*%s",arg[6+i],arg[6+i]);
-      fprintf(fp,"\n");
+      else for (i = 0; i < nvalues ; i++) fprintf(mean_file," %s*%s",arg[6+i],arg[6+i]);
+      fprintf(mean_file,"\n");
       mean_filepos = ftell(mean_file);
     }
  
     // init memory
-    if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED){
-      memory->create(mean,nvalues*bins,"ave/correlate/peratom:mean");
-      memory->create(mean_count,nvalues*bins,"ave/correlate/peratom:mean_count");
+    memory->create(mean,nvalues*bins,"ave/correlate/peratom:mean");
+    memory->create(mean_count,bins,"ave/correlate/peratom:mean_count");
+    for(o = 0; o < bins; o++){
       for (i = 0; i < nvalues; i++) {
-	for(o = 0; o < bins; o++){
-	  mean[i*bins+o]=0.0;
-	}
-	mean_count[o]=0.0;
+	mean[i+o*nvalues]=0.0;
       }
-    } else {
-      memory->create(mean,nvalues,"ave/correlate/peratom:mean");
-      memory->create(mean_count,1,"ave/correlate/peratom:mean_count");
-      for (i = 0; i < nvalues; i++) {
-	mean[i]=0.0;
-      }
-      mean_count[0]=0.0;
+      mean_count[o]=0.0;
     }
   }
   
@@ -973,7 +965,7 @@ void FixAveCorrelatePeratom::end_of_step()
   if (fp && me == 0) {
     if (overwrite) fseek(fp,filepos,SEEK_SET);
     fprintf(fp,BIGINT_FORMAT " %d\n",ntimestep,nrepeat);
-    for (i = 0; i < corr_length/corr_factor; i++) {
+    for (i = 0; i < corr_length/factor; i++) {
       if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED) {
 	int loc_bin = i%nrepeat;
 	int loc_ind = (i - loc_bin)/nrepeat;
@@ -1011,16 +1003,20 @@ void FixAveCorrelatePeratom::end_of_step()
     
         
   // output mean result to file
-  if (mean_file && me == 0) { //TODO
+  if (mean_file && me == 0) {
     if (overwrite) fseek(mean_file,mean_filepos,SEEK_SET);
     for (o = 0; o < bins; o++) {
-      fprintf(mean_file,"%f %f",count[o],range/bins*o);
-      if (count[o])
+      if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED)
+	fprintf(mean_file,"%f %f",mean_count[o],range/bins*o);
+      else 
+	fprintf(mean_file,"%f",mean_count[o]);
+      if (count[o]){
 	for (j = 0; j < nvalues; j++)
-	  fprintf(mean_file," %g",mean[j*bins+o]/mean_count[o]);
-      else
+	  fprintf(mean_file," %g",mean[j+o*nvalues]/mean_count[o]);
+      } else {
 	for (j = 0; j < nvalues; j++)
 	  fprintf(mean_file," 0.0");
+      }
       fprintf(mean_file,"\n");
     }
     fflush(mean_file);
@@ -1038,10 +1034,12 @@ void FixAveCorrelatePeratom::end_of_step()
       for (j = 0; j < npair; j++)
 	corr[i][j] = 0.0;
     }
-    if (mean_file) { //TODO
-      for (i = 0; i < corr_length; i++) {
-	mean_count[o] = 0.0;
-	mean[i*bins + o] = 0.0;
+    if (mean_file) {
+      for(o = 0; o < bins; o++){
+	for (i = 0; i < nvalues; i++) {
+	  mean[i+o*nvalues]=0.0;
+	}
+	mean_count[o]=0.0;
       }
     }
   }
@@ -1067,11 +1065,7 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
   double *global_accum;
   int accum_nsample = nsample;
   if (dynamics == ORTHOGONAL) accum_nsample = 1;
-  int accum_bins = 1;
-  if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED) accum_bins = bins;
-  int accum_factor = 1;
-  if(type==AUTOCROSS || variable_flag == DIST_DEPENDENED) accum_factor = 2;
-  int accum_length = accum_nsample*accum_bins*accum_factor;
+  int accum_length = accum_nsample*bins*factor;
   
   memory->create (local_accum, accum_length,"ave/correlate/peratom:local_accum");
   memory->create (global_accum, accum_length,"ave/correlate/peratom:global_accum");
@@ -1099,7 +1093,7 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 	//determine whether just autocorrelation or also cross correlation (different atoms)
 	double ngroup_lower = a;
 	double ngroup_upper = a+1;
-	if (type == AUTOCROSS || type == CROSS){
+	if (type == CROSS || type == AUTOCROSS){
 	  ngroup_lower = a;
 	  ngroup_upper = ngroup_loc;
 	}
@@ -1194,8 +1188,8 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
       MPI_Allreduce(local_accum, global_accum, accum_length, MPI_DOUBLE, MPI_SUM, world);
       if (dynamics == NORMAL) {
 	for (k = 0; k < accum_nsample; k++) {
-	  for (o = 0; o < accum_bins; o++) {
-	    int offset = k*accum_bins+o;
+	  for (o = 0; o < bins; o++) {
+	    int offset = k*bins+o;
 	    //printf("offset=%d, ipair=%d, nrepeat=%d, npair=%d\n",offset,ipair,nrepeat, npair);
 	    corr[offset][ipair]+= global_accum[offset];
 	    local_accum[offset] = global_accum[offset] = 0.0;
@@ -1241,8 +1235,8 @@ void FixAveCorrelatePeratom::decompose(double *res_data, double *dr, double *inp
     F2_p[p] = proj2*dr[p];
   }
   // parallel components
-  res_data[0] = sqrt( F1_p[0]*F1_p[0] + F1_p[1]*F1_p[1] + F1_p[2]*F1_p[2] );
-  res_data[1] = sqrt( F2_p[0]*F2_p[0] + F2_p[1]*F2_p[1] + F2_p[2]*F2_p[2] );
+  res_data[0] = sgn(proj1)*sqrt( F1_p[0]*F1_p[0] + F1_p[1]*F1_p[1] + F1_p[2]*F1_p[2] );
+  res_data[1] = sgn(-proj2)*sqrt( F2_p[0]*F2_p[0] + F2_p[1]*F2_p[1] + F2_p[2]*F2_p[2] );
   // orthogonal components
   for (p=0; p<3; p++){
     res_data[2+p] = inp_data[p] - F1_p[p];
@@ -1257,20 +1251,23 @@ void FixAveCorrelatePeratom::decompose(double *res_data, double *dr, double *inp
 /* ----------------------------------------------------------------------
    calculate mean values using more recently added values
 ------------------------------------------------------------------------- */
-void FixAveCorrelatePeratom::calc_mean(int *indices_group, int ngroup_loc){ //TODO
+void FixAveCorrelatePeratom::calc_mean(int *indices_group, int ngroup_loc){ 
   int a,b,i;
   tagint *tag = atom->tag;
   
-  for (i = 0; i < nvalues; i++) {
+  int incr_nvalues = 1;
+  if (variable_flag == DIST_DEPENDENED){ 
+    incr_nvalues = 3;
+  }
+  for (i = 0; i < nvalues; i+=incr_nvalues) {
     for (a= 0; a < ngroup_loc; a++) {
       //determine whether just autocorrelation or also cross correlation (different atoms)
-      double ngroup_lower = a;
       double ngroup_upper = a+1;
-      if (type == AUTOCROSS){
-	ngroup_lower = 0;
+      if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED){
 	ngroup_upper = ngroup_loc;
       }
-      for (b = ngroup_lower; b < ngroup_upper; b++) {
+      for (b = a; b < ngroup_upper; b++) {
+	if (type == CROSS && a==b) continue;
 	int inda,indb;
 	if(memory_switch==PERATOM){
 	  inda=indices_group[a];
@@ -1282,12 +1279,43 @@ void FixAveCorrelatePeratom::calc_mean(int *indices_group, int ngroup_loc){ //TO
 	  ids_ptr = std::find(group_ids,group_ids+ngroup_glo,tag[indices_group[b]]);
 	  indb = (ids_ptr - group_ids);
 	}
-	
-	  
+	if (variable_flag == VAR_DEPENDENED){
+	  double dV = variable_store[inda][lastindex] - variable_store[indb][lastindex];
+	  dV=fabs(dV);
+	  if(dV<range){
+	    int ind = dV/range*bins;
+	    if (i==0) mean_count[ind] += 2.0;
+	    mean[ind*nvalues+i] += array[inda][i * nsave + lastindex];
+	    mean[ind*nvalues+i] += array[indb][i * nsave + lastindex];
+	  }
+	} else if (variable_flag == DIST_DEPENDENED) {
+	  double *dr = new double[3];
+	  dr[0] = variable_store[inda][lastindex] - variable_store[indb][lastindex];
+	  dr[1] = variable_store[inda][lastindex+nsave] - variable_store[indb][lastindex+nsave];
+	  dr[2] = variable_store[inda][lastindex+2*nsave] - variable_store[indb][lastindex+2*nsave];
+	  double dV = sqrt( dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2]);
+	  //printf("dV=%f\n",dV);
+	  if(dV<range){
+	    double *res_data = new double[8];
+	    double *inp_data = new double[6];
+	    int p;
+	    for (p=0; p<3; p++) inp_data[p] = array[inda][ (i+p) * nsave + lastindex];
+	    for (p=0; p<3; p++) inp_data[p+3] = array[indb][ (i+p) * nsave + lastindex];
+	    decompose(res_data,dr,inp_data);
+	    //for (int z=0; z<8; z++) printf("res_data[%d]=%f\n",z,res_data[z]);
+	    // calculate correlation
+	    int ind = dV/range*bins;
+	    if(i==0) mean_count[ind]+=2.0;
+	    mean[ind*nvalues+i] += res_data[0];
+	    mean[ind*nvalues+i+1] += res_data[1];
+	  } 
+	} else {
+	  if(i==0) mean_count[0] += 1.0;
+	  mean[i] += array[inda][i * nsave + lastindex];
+	}
       }
     }
   }
-  
 }
 
 /* ----------------------------------------------------------------------
@@ -1505,7 +1533,7 @@ void FixAveCorrelatePeratom::restart(char *buf){
   for (i = 0; i < corr_length; i++) count[i] = dbuf[dcount++];
 
   for (i = 0; i < corr_length; i++)
-	for (j = 0; j < npair; j++) corr[i][j] = dbuf[dcount++];
+    for (j = 0; j < npair; j++) corr[i][j] = dbuf[dcount++];
 
   // orth. dynamics
   if (dynamics == ORTHOGONAL || dynamics == ORTHOGONALSECOND){
@@ -1536,4 +1564,9 @@ void FixAveCorrelatePeratom::restart(char *buf){
 	  zeta[a][t] = dbuf[dcount++];
     }
   }
+}
+
+/* sign-function */
+template <typename T> int FixAveCorrelatePeratom::sgn(T val) {
+    return (T(0) < val) - (val < T(0));
 }

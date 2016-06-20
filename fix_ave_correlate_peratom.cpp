@@ -347,6 +347,8 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
 	  strcat(str2,"_o");
           fprintf(fp," %s*%s",str1,str1);
 	  fprintf(fp," %s*%s",str2,str2);
+	  delete[] str1;
+	  delete[] str2;
 	}
       if (type == AUTO || type == AUTOCROSS || type == CROSS )
         for (i = 0; i < nvalues ; i++)
@@ -395,6 +397,8 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
 	  strcat(str2,"_o");
           fprintf(mean_file," %s*%s",str1,str1);
 	  fprintf(mean_file," %s*%s",str2,str2);
+	  delete[] str1;
+	  delete[] str2;
 	}
       else for (i = 0; i < nvalues ; i++) fprintf(mean_file," %s*%s",arg[6+i],arg[6+i]);
       fprintf(mean_file,"\n");
@@ -489,6 +493,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
       memory->create(group_data,ngroup_glo,nvalues+include_orthogonal+variable_nvalues,"ave/correlate/peratom:group_data");
     }
   }
+  memory->destroy(indices_group);
   
   if (dynamics == ORTHOGONAL || dynamics == ORTHOGONALSECOND) {
     //create memory for orthogonal dynamics
@@ -548,6 +553,17 @@ FixAveCorrelatePeratom::~FixAveCorrelatePeratom()
       memory->destroy(kappa);
       memory->destroy(zeta); 
     }
+  }
+  
+  memory->destroy(group_data_loc);
+  memory->destroy(group_data);
+  
+  memory->destroy(group_ids);
+  memory->destroy(group_mass);
+  
+  if (mean_file) {
+    memory->destroy(mean);
+    memory->destroy(mean_count);
   }
   
   if (fp && me == 0) fclose(fp);
@@ -1151,7 +1167,10 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 		  local_accum[offset] += res_data[0]*res_data[1];
 		  if(i==0&&j==0) count[offset+corr_length/2]+=1.0;
 		  local_accum[offset+accum_length/2] += res_data[2]*res_data[5]+res_data[3]*res_data[6]+res_data[4]*res_data[7];
+		  delete[] res_data;
+		  delete[] inp_data;
 		}
+		delete[] dr;
 	      } else {
 		if (type == AUTOCROSS && b!=a) {
 		  if(i==0&&j==0) count[k+corr_length/2]+=1.0;
@@ -1211,7 +1230,6 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
       ipair+=incr_ipair;
     }
   }
-
   
   memory->destroy(local_accum);
   memory->destroy(global_accum);
@@ -1242,6 +1260,9 @@ void FixAveCorrelatePeratom::decompose(double *res_data, double *dr, double *inp
     res_data[2+p] = inp_data[p] - F1_p[p];
     res_data[5+p] = inp_data[3+p] - F2_p[p];
   }
+  
+  delete[] F1_p;
+  delete[] F2_p;
 
   //if(res_data[0]==0.0){
   //  printf("dr[0]=%f, dr[0]=%f, dr[0]=%f, inp_data[0]=%f, inp_data[1]=%f, inp_data[2]=%f\n",dr[0],dr[1],dr[2],inp_data[0],inp_data[1],inp_data[2]);
@@ -1308,7 +1329,10 @@ void FixAveCorrelatePeratom::calc_mean(int *indices_group, int ngroup_loc){
 	    if(i==0) mean_count[ind]+=2.0;
 	    mean[ind*nvalues+i] += res_data[0];
 	    mean[ind*nvalues+i+1] += res_data[1];
+	    delete[] res_data;
+	    delete[] inp_data;
 	  } 
+	  delete[] dr;
 	} else {
 	  if(i==0) mean_count[0] += 1.0;
 	  mean[i] += array[inda][i * nsave + lastindex];
@@ -1498,6 +1522,8 @@ void FixAveCorrelatePeratom::write_restart(FILE *fp){
     }
   }
   
+  if (mean_file) n += bins*nvalues + bins;
+  
   //write data
   if (comm->me == 0) {
     int size = n * sizeof(double);
@@ -1514,6 +1540,11 @@ void FixAveCorrelatePeratom::write_restart(FILE *fp){
 	fwrite(&kappa[0][0],sizeof(double),nrepeat*ngroup_glo,fp);
 	fwrite(&zeta[0][0],sizeof(double),nrepeat*ngroup_glo,fp);
       }
+    }
+    //mean
+    if (mean_file) {
+      fwrite(mean_count,sizeof(double),bins,fp);
+      fwrite(mean,sizeof(double),bins*nvalues,fp);
     }
   }
 }
@@ -1563,6 +1594,14 @@ void FixAveCorrelatePeratom::restart(char *buf){
 	for (t = 0; t < nrepeat; t++) 
 	  zeta[a][t] = dbuf[dcount++];
     }
+  }
+  
+  //mean
+  if (mean_file) {
+    for (o=0; o<bins; o++) mean_count[o] = dbuf[dcount++];
+      
+    for (o=0; o<bins; o++)
+      for (i=0; i<nvalues; i++) mean[i+o*nvalues] = dbuf[dcount++];
   }
 }
 

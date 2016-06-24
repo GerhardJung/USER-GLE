@@ -76,6 +76,7 @@ class FixAveCorrelatePeratom : public Fix {
   char *title1,*title2,*title3;
   long filepos;
   
+  int mean_flag;
   FILE *mean_file;
   double *mean_count;
   double *mean;
@@ -103,6 +104,18 @@ class FixAveCorrelatePeratom : public Fix {
   void calc_mean(int *indices_group, int ngroup_loc);
   void decompose(double *res_data, double *dr, double *inp_data);
   int first;
+  
+  //timing
+  /* double t1;
+  double t2;
+  double time_init_compute;
+  double calc_write_nvalues;
+  double write_var;
+  double write_orthogonal;
+  double reduce_write_global;
+  double time_calc;
+  double time_calc_mean;
+  double time_total; */
   
   template <typename T> int sgn(T val);
 };

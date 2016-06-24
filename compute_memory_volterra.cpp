@@ -36,7 +36,6 @@
 
 using namespace LAMMPS_NS;
 
-enum{ONE,RUNNING};
 enum{PERATOM,GLOBAL};
 
 /* ---------------------------------------------------------------------- */

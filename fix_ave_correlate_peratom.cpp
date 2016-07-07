@@ -842,19 +842,36 @@ void FixAveCorrelatePeratom::end_of_step()
     // exclude the last nvalues while memory calculation is performed
     double exclude_memory = 0;
     if ((nsample >= nsave) && (dynamics == ORTHOGONAL || dynamics == ORTHOGONALSECOND)) exclude_memory = -nvalues;
-    MPI_Reduce(&group_data_loc[0][0], &group_data[0][0], ngroup_glo*(nvalues+include_orthogonal+variable_nvalues), MPI_DOUBLE, MPI_SUM, 0, world);
-    if (me == 0) {
-      for (a= 0; a < ngroup_glo; a++) {
-	for (i=0; i< nvalues+include_orthogonal+exclude_memory;i++) {
-	  int offset = i*nsave + lastindex;
-	  array[a][offset] = group_data[a][i];
-	}
-	if (variable_flag == VAR_DEPENDENED) {
-	  variable_store[a][lastindex] = group_data[a][nvalues+include_orthogonal];
-	} else if (variable_flag == DIST_DEPENDENED) {
-	  for (r = 0; r < 3 ; r++) {
-	    variable_store[a][lastindex+r*nsave] = group_data[a][nvalues+include_orthogonal+r];
-	  }
+    
+    //transport data
+    MPI_Win win;
+    int block_length = nvalues+include_orthogonal+variable_nvalues;
+    MPI_Win_create(&group_data[0][0],ngroup_glo*block_length*sizeof(double), sizeof(double), MPI_INFO_NULL, MPI_COMM_WORLD, &win);
+    MPI_Win_fence(0, win);
+    for (a= 0; a < ngroup_loc; a++) {
+      tagint *ids_ptr;
+      ids_ptr = std::find(group_ids,group_ids+ngroup_glo,tag[indices_group[a]]);
+      int ind = (ids_ptr - group_ids);
+      MPI_Put(&group_data_loc[ind][0],block_length,MPI_DOUBLE,0,ind*block_length,block_length,MPI_DOUBLE,win);
+    }
+    MPI_Win_fence(0, win);
+    
+    //scatter 
+    MPI_Get(&group_data[0][0],ngroup_glo*block_length,MPI_DOUBLE,0,0,ngroup_glo*block_length,MPI_DOUBLE,win);
+    MPI_Win_fence(0, win);
+    
+    MPI_Win_free(&win); 
+    
+    for (a= 0; a < ngroup_glo; a++) {
+      for (i=0; i< nvalues+include_orthogonal+exclude_memory;i++) {
+	int offset = i*nsave + lastindex;
+	array[a][offset] = group_data[a][i];
+      }
+      if (variable_flag == VAR_DEPENDENED) {
+	variable_store[a][lastindex] = group_data[a][nvalues+include_orthogonal];
+      } else if (variable_flag == DIST_DEPENDENED) {
+	for (r = 0; r < 3 ; r++) {
+	  variable_store[a][lastindex+r*nsave] = group_data[a][nvalues+include_orthogonal+r];
 	}
       }
     }

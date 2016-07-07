@@ -45,7 +45,7 @@ class FixAveCorrelatePeratom : public Fix {
   void restart(char *);
 
  private:
-  int me,nvalues;
+  int me,nvalues,nprocs;
   int nrepeat,nfreq;
   int nav,nsave;
   bigint nvalid;
@@ -104,6 +104,8 @@ class FixAveCorrelatePeratom : public Fix {
   void calc_mean(int *indices_group, int ngroup_loc);
   void decompose(double *res_data, double *dr, double *inp_data);
   int first;
+  
+  MPI_Win win;
   
   //timing
   /* double t1;

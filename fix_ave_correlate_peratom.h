@@ -80,6 +80,8 @@ class FixAveCorrelatePeratom : public Fix {
   FILE *mean_file;
   double *mean_count;
   double *mean;
+  double *save_mean_count;
+  double *save_mean;
   long mean_filepos;
 
   int lastindex;       // index in values ring of latest time sample
@@ -105,10 +107,8 @@ class FixAveCorrelatePeratom : public Fix {
   void decompose(double *res_data, double *dr, double *inp_data);
   int first;
   
-  MPI_Win win;
-  
   //timing
-  /* double t1;
+  double t1;
   double t2;
   double time_init_compute;
   double calc_write_nvalues;
@@ -116,8 +116,9 @@ class FixAveCorrelatePeratom : public Fix {
   double write_orthogonal;
   double reduce_write_global;
   double time_calc;
+  double time_red_calc;
   double time_calc_mean;
-  double time_total; */
+  double time_total; 
   
   template <typename T> int sgn(T val);
 };

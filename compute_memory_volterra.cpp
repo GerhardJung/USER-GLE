@@ -131,11 +131,13 @@ ComputeMemoryVolterra::ComputeMemoryVolterra(LAMMPS * lmp, int narg, char **arg)
   int *type = atom->type;
   double *a_mass = atom->mass;
   int a;
+  double mass_loc = 0;
   for (a= 0; a < nlocal; a++) {
     if(mask[a] & groupbit) {
-      mass=a_mass[type[a]];
+      mass_loc=a_mass[type[a]];
     }
   }
+  MPI_Reduce(&mass_loc, &mass, 1, MPI_DOUBLE, MPI_MAX, 0, world);
   
   // allocate memory
   memory->create(array,nrepeat,nmem,"memory/volterra:array");
@@ -175,6 +177,7 @@ void ComputeMemoryVolterra::init()
 
 void ComputeMemoryVolterra::compute_array()
 {
+  if (me==0) {
   double **corr;
   int i,j;
   memory->create(corr,nrepeat,ncorr,"memory/volterra:corr");
@@ -184,11 +187,15 @@ void ComputeMemoryVolterra::compute_array()
   //mask tells where to find the correct correlations
   double mask[] = {0,3,15,1,4,16,2,5,17,6,9,18,7,10,19,11,14,20};
   for (i = 0; i<nrepeat; i++)
-    for (j = 0; j<ncorr; j++)
+    for (j = 0; j<ncorr; j++){
       corr[i][j]=fix->compute_array(i, mask[j]+2);
+      //printf("corr[i][j]=%f\n",corr[i][j]);
+    }
   // use correlation function to calculate memory
   for (j = 0; j<nmem; j++){
+    //printf("mass=%f\n",mass);
     array[0][j]=corr[0][3*j+2]/corr[0][3*j]/mass/mass;
+    
     for(i = 1; i<nrepeat; i++){
       //denum = C(0)+dt*C'(i)
       double denum = mass*mass*corr[0][3*j]+0.5*mass*update->dt*corr[i][3*j+1];
@@ -199,14 +206,24 @@ void ComputeMemoryVolterra::compute_array()
       for(ip = 1; ip<i; ip++){
 	num -= mass*update->dt*corr[i-ip][3*j+1]*array[ip][j];
       }
+      //printf("num=%f, denum=%f\n",num,denum);
       array[i][j]=num/denum;
     }
   }
   for (j = 0; j<nmem; j++){
     for(i = 0; i<nrepeat; i++){
       array[i][j] *= mass*mass*corr[0][3*j];
+      //printf("array[i][j]=%f\n",array[i][j]);
     }
   }
     
   memory->destroy(corr);
+  } else {
+     int i,j;
+    for (j = 0; j<nmem; j++){
+    for(i = 0; i<nrepeat; i++){
+      array[i][j] = 0;
+    }
+  }
+  }
 }

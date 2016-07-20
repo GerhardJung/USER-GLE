@@ -375,13 +375,15 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   // set count and corr to zero since they accumulate
   // also set save versions to zero in case accessed via compute_array()
   corr_length = nrepeat*bins*factor;
-memory->create(count,corr_length,"ave/correlate/peratom:count");
+memory->create(local_count,corr_length,"ave/correlate/peratom:local_count");
+memory->create(global_count,corr_length,"ave/correlate/peratom:local_count");
 memory->create(save_count,corr_length,"ave/correlate/peratom:save_count");
-memory->create(corr,corr_length,npair,"ave/correlate/peratom:corr");
+memory->create(local_corr,corr_length,npair,"ave/correlate/peratom:corr");
+memory->create(global_corr,corr_length,npair,"ave/correlate/peratom:corr");
 memory->create(save_corr,corr_length,npair,"ave/correlate/peratom:save_corr");
   for (i = 0; i < corr_length; i++) {
-    save_count[i] = count[i] =  0.0;
-    for (j = 0; j < npair; j++) save_corr[i][j] = corr[i][j] = 0.0;
+    save_count[i] = local_count[i] =  global_count[i] = 0.0;
+    for (j = 0; j < npair; j++) save_corr[i][j] = local_corr[i][j] = global_corr[i][j] = 0.0;
   }
 
   if (mean_flag) {
@@ -410,13 +412,12 @@ memory->create(save_corr,corr_length,npair,"ave/correlate/peratom:save_corr");
     // init memory
 memory->create(mean,nvalues*bins,"ave/correlate/peratom:mean");
 memory->create(mean_count,bins,"ave/correlate/peratom:mean_count");
-memory->create(save_mean,nvalues*bins,"ave/correlate/peratom:save_mean");
-memory->create(save_mean_count,bins,"ave/correlate/peratom:mean_count");
+
     for(o = 0; o < bins; o++){
       for (i = 0; i < nvalues; i++) {
-    mean[i+o*nvalues]=save_mean[i+o*nvalues]=0.0;
+    mean[i+o*nvalues]=0.0;
       }
-      mean_count[o]=save_mean_count[o]=0.0;
+      mean_count[o]=0.0;
     }
   }
 
@@ -552,9 +553,11 @@ FixAveCorrelatePeratom::~FixAveCorrelatePeratom()
   delete [] ids;
 
   memory->destroy(array);
-  memory->destroy(count);
+  memory->destroy(local_count);
   memory->destroy(save_count);
-  memory->destroy(corr);
+  memory->destroy(global_count);
+  memory->destroy(local_corr);
+  memory->destroy(global_corr);
   memory->destroy(save_corr);
   if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED) memory->destroy(variable_store);
 
@@ -1017,23 +1020,19 @@ memory->grow(indices_group,ngroup_loc,"ave/correlate/peratomindices_group");
   }
 
   //reduce the results from every proc
-  MPI_Reduce(count, save_count, corr_length, MPI_DOUBLE, MPI_SUM, 0, world);
-  MPI_Reduce(&corr[0][0], &save_corr[0][0], npair*corr_length, MPI_DOUBLE, MPI_SUM, 0, world);
+  MPI_Reduce(local_count, global_count, corr_length, MPI_DOUBLE, MPI_SUM, 0, world);
+  MPI_Reduce(&local_corr[0][0], &global_corr[0][0], npair*corr_length, MPI_DOUBLE, MPI_SUM, 0, world);
+  //reset local arrays
   for (i = 0; i < corr_length; i++) {
-      count[i] = 0.0;
-    for (j = 0; j < npair; j++)
-      corr[i][j] = 0.0;
+    save_count[i] += global_count[i];
+    local_count[i] =  global_count[i] = 0.0;
+    for (j = 0; j < npair; j++){
+      save_corr[i][j] += global_corr[i][j];
+      local_corr[i][j] = global_corr[i][j] = 0.0;
+    }
   }
 
   if (me == 0) {
-    // save results in save_count and save_corr
-    for (i = 0; i < corr_length; i++) {
-      if (save_count[i]) {
-    for (j = 0; j < npair; j++)
-      save_corr[i][j] = prefactor*save_corr[i][j]/save_count[i];
-      }
-    }
-
     // output result to file
     if (fp) {
       if (overwrite) fseek(fp,filepos,SEEK_SET);
@@ -1048,7 +1047,7 @@ memory->grow(indices_group,ngroup_loc,"ave/correlate/peratomindices_group");
     }
     if (save_count[i]) {
       for (j = 0; j < npair; j++)
-        fprintf(fp," %g",save_corr[i][j]);
+        fprintf(fp," %g",prefactor*save_corr[i][j]/save_count[i]);
     } else {
       for (j = 0; j < npair; j++)
         fprintf(fp," 0.0");
@@ -1059,7 +1058,7 @@ memory->grow(indices_group,ngroup_loc,"ave/correlate/peratomindices_group");
         fprintf(fp," %f",save_count[offset]);
       if (save_count[offset]) {
         for (j = 0; j < npair; j++)
-          fprintf(fp," %g",save_corr[offset][j]);
+          fprintf(fp," %g",prefactor*save_corr[offset][j]/save_count[offset]);
       } else {
         for (j = 0; j < npair; j++)
           fprintf(fp," 0.0");
@@ -1075,31 +1074,18 @@ memory->grow(indices_group,ngroup_loc,"ave/correlate/peratomindices_group");
     }
   }
 
-  //reduce the results from every proc
-  if (mean_flag) {
-    MPI_Reduce(mean_count, save_mean_count, bins, MPI_DOUBLE, MPI_SUM, 0, world);
-    MPI_Reduce(mean, save_mean, nvalues*bins, MPI_DOUBLE, MPI_SUM, 0, world);
-
-    for(o = 0; o < bins; o++){
-      mean_count[o] = 0.0;
-      for (j = 0; j < nvalues; j++) {
-    mean[j+o*nvalues] = 0.0;
-      }
-    }
-  }
-
   if (me == 0) {
     // output mean result to file
     if (mean_flag) {
       if (overwrite) fseek(mean_file,mean_filepos,SEEK_SET);
       for (o = 0; o < bins; o++) {
     if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED)
-      fprintf(mean_file,"%f %f",save_mean_count[o],range/bins*o);
+      fprintf(mean_file,"%f %f",mean_count[o],range/bins*o);
     else
-      fprintf(mean_file,"%f",save_mean_count[o]);
-    if (count[o]){
+      fprintf(mean_file,"%f",mean_count[o]);
+    if (mean_count[o]){
       for (j = 0; j < nvalues; j++)
-        fprintf(mean_file," %g",save_mean[j+o*nvalues]/save_mean_count[o]);
+        fprintf(mean_file," %g",mean[j+o*nvalues]/mean_count[o]);
     } else {
       for (j = 0; j < nvalues; j++)
         fprintf(mean_file," 0.0");
@@ -1124,9 +1110,9 @@ memory->grow(indices_group,ngroup_loc,"ave/correlate/peratomindices_group");
       if (mean_flag) {
     for(o = 0; o < bins; o++){
       for (i = 0; i < nvalues; i++) {
-        save_mean[i+o*nvalues]=0.0;
+        mean[i+o*nvalues]=0.0;
       }
-      save_mean_count[o]=0.0;
+      mean_count[o]=0.0;
     }
       }
     }
@@ -1159,20 +1145,6 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
   int nlocal= atom->nlocal;
   tagint *tag = atom->tag;
 
-  // create local memory for accumulation and reduction
-  double *local_accum_corr;
-  double *local_accum_count;
-  int accum_nsample = nsample;
-  if (dynamics == ORTHOGONAL || dynamics == ORTHOGONALSECOND) accum_nsample = 1;
-  int accum_length = accum_nsample*bins*factor;
-
-  memory->create (local_accum_corr, accum_length,"ave/correlate/peratom:local_accum_corr");
-  memory->create (local_accum_count, accum_length,"ave/correlate/peratom:local_accum_count");
-  for (k = 0; k < accum_length; k++){
-    local_accum_corr[k] = 0.0;
-    local_accum_count[k] = 0.0;
-  }
-
   //calculate work distribution
   int sample_start = 0,
       sample_stop = 0;
@@ -1187,6 +1159,8 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
       sample_start = (work+1)*rest + work*(me-rest);
       sample_stop = (work+1)*rest + work*(me-rest+1);
     }
+    //sample_start = 0;
+    //sample_stop = nsample;
   } else {
     int work = (nsave-1)/nprocs;
     int rest = nsave - 1 - nprocs*work;
@@ -1198,6 +1172,8 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
       sample_start = nsave - 1 - (work+1)*rest - work*(me-rest);
       sample_stop = nsave - 1 - (work+1)*rest - work*(me-rest+1);
     }
+    //sample_start = nsave - 1 ;
+    //sample_stop = 0;
   }
 
 
@@ -1227,7 +1203,8 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
       if (type == CROSS && a==b) continue;
 
       //initialize counter for work distribution
-      m = lastindex-sample_start;
+      if(dynamics==NORMAL) m = lastindex - sample_start;
+      else m = lastindex - (nsave - 1 - sample_start);
       if (m < 0) m = nsave+m;
       //printf("%d\n",m);
       int inda,indb;
@@ -1248,11 +1225,11 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
           int offset= k*bins+ind;
           //count once
           if (type == AUTOCROSS && b!=a) {
-            if(i==0&&j==0) local_accum_count[offset+accum_length/2]+=1.0;
-            local_accum_corr[offset+accum_length/2] += array[inda][i * nsave + m]*array[indb][j * nsave + n];
+            if(i==0&&j==0) local_count[offset+corr_length/2]+=1.0;
+            local_corr[offset+corr_length/2][ipair] += array[inda][i * nsave + m]*array[indb][j * nsave + n];
           } else {
-            if(i==0&&j==0) local_accum_count[offset]+=1.0;
-            local_accum_corr[offset]+=array[inda][i * nsave + m]*array[indb][j * nsave + n];
+            if(i==0&&j==0) local_count[offset]+=1.0;
+            local_corr[offset][ipair]+=array[inda][i * nsave + m]*array[indb][j * nsave + n];
           }
         }
           } else if (variable_flag == DIST_DEPENDENED) {
@@ -1273,21 +1250,21 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
           // calculate correlation
           int ind = dV/range*bins;
           int offset= k*bins+ind;
-          if(i==0&&j==0) local_accum_count[offset]+=1.0;
-          local_accum_corr[offset] += res_data[0]*res_data[1];
-          if(i==0&&j==0) local_accum_count[offset+accum_length/2]+=1.0;
-          local_accum_corr[offset+accum_length/2] += res_data[2]*res_data[5]+res_data[3]*res_data[6]+res_data[4]*res_data[7];
+          if(i==0&&j==0) local_count[offset]+=1.0;
+          local_corr[offset][ipair] += res_data[0]*res_data[1];
+          if(i==0&&j==0) local_count[offset+corr_length/2]+=1.0;
+          local_corr[offset+corr_length/2][ipair] += res_data[2]*res_data[5]+res_data[3]*res_data[6]+res_data[4]*res_data[7];
           delete[] res_data;
           delete[] inp_data;
         }
         delete[] dr;
           } else { //no variable dependency
         if (type == AUTOCROSS && b!=a) {
-          if(i==0&&j==0) local_accum_count[k+accum_length/2]+=1.0;
-          local_accum_corr[k+accum_length/2] += array[inda][i * nsave + m]*array[indb][j * nsave + n];
+          if(i==0&&j==0) local_count[k+corr_length/2]+=1.0;
+          local_corr[k+corr_length/2][ipair] += array[inda][i * nsave + m]*array[indb][j * nsave + n];
         } else {
-          if(i==0&&j==0) local_accum_count[k]+=1.0;
-          local_accum_corr[k]+= array[inda][i * nsave + m]*array[indb][j * nsave + n];
+          if(i==0&&j==0) local_count[k]+=1.0;
+          local_corr[k][ipair]+= array[inda][i * nsave + m]*array[indb][j * nsave + n];
         }
           }
           m--;
@@ -1303,11 +1280,11 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
           int offset= t*bins+ind;
           //count once
           if (type == AUTOCROSS && b!=a) {
-            if(i==0&&j==0) local_accum_count[ind+accum_length/2]+=1.0;
-            local_accum_corr[ind+accum_length/2] += array[inda][i*nsave+m]*array[indb][(j+nvalues+6)*nsave+k];
+            if(i==0&&j==0) local_count[offset+corr_length/2]+=1.0;
+            local_corr[offset+corr_length/2][ipair] += array[inda][i*nsave+m]*array[indb][(j+nvalues+6)*nsave+k];
           } else {
-            if(i==0&&j==0) local_accum_count[ind]+=1.0;
-            local_accum_corr[ind]+=array[inda][i * nsave + m]*array[indb][j * nsave + n];
+            if(i==0&&j==0) local_count[offset]+=1.0;
+            local_corr[offset][ipair]+=array[inda][i * nsave + m]*array[indb][j * nsave + n];
           }
         }
           } else if (variable_flag == DIST_DEPENDENED) {
@@ -1328,21 +1305,22 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
           // calculate correlation
           int ind = dV/range*bins;
           int offset= t*bins+ind;
-          if(i==0&&j==0) local_accum_count[ind]+=1.0;
-          local_accum_corr[ind] += res_data[0]*res_data[1];
-          if(i==0&&j==0) local_accum_count[ind+accum_length/2]+=1.0;
-          local_accum_corr[ind+accum_length/2] += res_data[2]*res_data[5]+res_data[3]*res_data[6]+res_data[4]*res_data[7];
+          if(i==0&&j==0) local_count[offset]+=1.0;
+          local_corr[offset][ipair] += res_data[0]*res_data[1];
+          if(i==0&&j==0) local_count[offset+corr_length/2]+=1.0;
+          local_corr[offset+corr_length/2][ipair] += res_data[2]*res_data[5]+res_data[3]*res_data[6]+res_data[4]*res_data[7];
           delete[] res_data;
           delete[] inp_data;
         }
         delete[] dr;
           } else { //no variable dependency
+	    int offset= t;
         if (type == AUTOCROSS && b!=a) {
-          if(i==0&&j==0) local_accum_count[1]+=1.0;
-          local_accum_corr[1] += array[inda][i*nsave+m]*array[indb][(j+nvalues+6)*nsave+k];
+          if(i==0&&j==0) local_count[offset+corr_length/2]+=1.0;
+          local_corr[offset+corr_length/2][ipair] += array[inda][i*nsave+m]*array[indb][(j+nvalues+6)*nsave+k];
         } else {
-          if(i==0&&j==0) local_accum_count[0]+=1.0;
-          local_accum_corr[0]+= array[inda][i*nsave+m]*array[indb][(j+nvalues+6)*nsave+k];
+          if(i==0&&j==0) local_count[offset]+=1.0;
+          local_corr[offset][ipair]+= array[inda][i*nsave+m]*array[indb][(j+nvalues+6)*nsave+k];
         }
           }
           m--;
@@ -1351,43 +1329,10 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
       }
     }
       }
-
-      // calculate the local correlation
-      if (dynamics == NORMAL) {
-    for (k = 0; k < accum_nsample; k++) {
-      for (o = 0; o < bins; o++) {
-        int offset = k*bins+o;
-        //printf("offset=%d, ipair=%d, nrepeat=%d, npair=%d\n",offset,ipair,nrepeat, npair);
-        corr[offset][ipair]+= local_accum_corr[offset];
-        if(i==0&&j==0) count[offset]+= local_accum_count[offset];
-        local_accum_count[offset] =  local_accum_corr[offset] = 0.0;
-        if (type == AUTOCROSS || variable_flag == DIST_DEPENDENED) {
-          //printf("%d %d %f\n",offset+corr_length/2,ipair,corr[offset+corr_length/2][ipair]);
-          corr[offset+corr_length/2][ipair]+= local_accum_corr[offset+accum_length/2];
-          count[offset+corr_length/2]+= local_accum_count[offset+accum_length/2];
-          local_accum_corr[offset+accum_length/2] = local_accum_count[offset+accum_length/2] = 0.0;
-        }
-      }
-    }
-      } else {
-    for (o = 0; o < bins; o++) {
-      int offset = t*bins+o;
-      corr[offset][ipair] += local_accum_corr[o];
-      if(i==0&&j==0) count[offset] += local_accum_count[o];
-      local_accum_corr[o] = local_accum_count[o] = 0.0;
-      if (type == AUTOCROSS || variable_flag == DIST_DEPENDENED) {
-        corr[offset+corr_length/2][ipair] += local_accum_corr[o+accum_length/2];
-        count[offset+corr_length/2] += local_accum_count[o+accum_length/2];
-        local_accum_corr[o+accum_length/2] = local_accum_count[o+accum_length/2] = 0.0;
-      }
-    }
-      }
       ipair++;
     }
   }
 
-  memory->destroy(local_accum_corr);
-  memory->destroy(local_accum_count);
 
 }
 
@@ -1431,22 +1376,6 @@ void FixAveCorrelatePeratom::calc_mean(int *indices_group, int ngroup_loc){
   int a,b,i,o,k;
   tagint *tag = atom->tag;
 
-  // create local memory for accumulation and reduction
-
-  double *local_accum_mean;
-  double *global_accum_mean;
-  double *local_accum_count;
-  double *global_accum_count;
-  int accum_length = bins;
-
-  memory->create(local_accum_mean, accum_length,"ave/correlate/peratom:local_accum_mean");
-  memory->create(global_accum_mean, accum_length,"ave/correlate/peratom:global_accum_mean");
-  memory->create(local_accum_count, accum_length,"ave/correlate/peratom:local_accum_count");
-  memory->create(global_accum_count, accum_length,"ave/correlate/peratom:global_accum_count");
-  for (o=0; o<accum_length; o++){
-    local_accum_mean[o] = global_accum_mean[o] = 0.0;
-    local_accum_count[o] = global_accum_count[o] = 0.0;
-  }
   int incr_nvalues = 1;
   if (variable_flag == DIST_DEPENDENED){
     incr_nvalues = 3;
@@ -1474,9 +1403,8 @@ void FixAveCorrelatePeratom::calc_mean(int *indices_group, int ngroup_loc){
       dV=fabs(dV);
       if(dV<range){
         int ind = dV/range*bins;
-        if (i==0) local_accum_count[ind] += 2.0;
-        local_accum_mean[ind] += array[inda][i * nsave + lastindex];
-        local_accum_mean[ind] += array[indb][i * nsave + lastindex];
+        if (i==0) mean_count[ind] += 2.0;
+        mean[ind*nvalues+i] += array[inda][i * nsave + lastindex];
       }
     } else if (variable_flag == DIST_DEPENDENED) {
 
@@ -1497,33 +1425,22 @@ void FixAveCorrelatePeratom::calc_mean(int *indices_group, int ngroup_loc){
         //for (int z=0; z<8; z++) printf("res_data[%d]=%f\n",z,res_data[z]);
         // calculate correlation
         int ind = dV/range*bins;
-        if(i==0) local_accum_count[ind]+=2.0;
-        local_accum_mean[ind] += res_data[0];
-        local_accum_mean[ind] += res_data[1];
+        if(i==0) mean_count[ind]+=2.0;
+        mean[ind*nvalues+i] += res_data[0];
+        mean[ind*nvalues+i] += res_data[1];
         delete[] res_data;
         delete[] inp_data;
       }
       delete[] dr;
     } else {
-      if(i==0) local_accum_count[0] += 1.0;
-      local_accum_mean[0] += array[inda][i * nsave + lastindex];
+      if(i==0) mean_count[0] += 1.0;
+      mean[i] += array[inda][i * nsave + lastindex];
     }
       }
     }
 
-    // reduce the results from each proc to calculate the global correlation
-    for(o=0; o<bins; o++){
-      mean[o*nvalues+i] += local_accum_mean[o];
-      mean_count[o] += local_accum_count[o];
-      local_accum_mean[o] = global_accum_mean[o] = 0.0;
-      local_accum_count[o] = global_accum_count[o] = 0.0;
-    }
   }
 
-  memory->destroy (local_accum_mean);
-  memory->destroy (global_accum_mean);
-  memory->destroy (local_accum_count);
-  memory->destroy (global_accum_count);
 }
 
 /* ----------------------------------------------------------------------
@@ -1534,7 +1451,7 @@ double FixAveCorrelatePeratom::compute_array(int i, int j)
 {
   if (j == 0) return 1.0*i*nevery;
   else if (j == 1) return 1.0*save_count[i];
-  else if (save_count[i]) return save_corr[i][j-2];
+  else if (save_count[i]) return prefactor*save_corr[i][j-2]/save_count[i];
   return 0.0;
 }
 
@@ -1713,8 +1630,8 @@ void FixAveCorrelatePeratom::write_restart(FILE *fp){
     int size = n * sizeof(double);
     fwrite(&size,sizeof(int),1,fp);
     // count and correlation
-    fwrite(count,sizeof(double),ncount,fp);
-    fwrite(&corr[0][0],sizeof(double),ncorr,fp);
+    fwrite(save_count,sizeof(double),ncount,fp);
+    fwrite(&save_corr[0][0],sizeof(double),ncorr,fp);
     // orth. dynamics
     if (dynamics == ORTHOGONAL || dynamics == ORTHOGONALSECOND){
 fwrite(&alpha[0][0],sizeof(double),3*nrepeat*nvalues*ngroup_glo,fp);
@@ -1745,10 +1662,10 @@ void FixAveCorrelatePeratom::restart(char *buf){
   int dcount = 0;
   // count + correlation
 
-  for (i = 0; i < corr_length; i++) count[i] = dbuf[dcount++];
+  for (i = 0; i < corr_length; i++) save_count[i] = dbuf[dcount++];
 
   for (i = 0; i < corr_length; i++)
-    for (j = 0; j < npair; j++) corr[i][j] = dbuf[dcount++];
+    for (j = 0; j < npair; j++) save_corr[i][j] = dbuf[dcount++];
 
   // orth. dynamics
   if (dynamics == ORTHOGONAL || dynamics == ORTHOGONALSECOND){

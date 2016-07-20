@@ -80,8 +80,6 @@ class FixAveCorrelatePeratom : public Fix {
   FILE *mean_file;
   double *mean_count;
   double *mean;
-  double *save_mean_count;
-  double *save_mean;
   long mean_filepos;
 
   int lastindex;       // index in values ring of latest time sample
@@ -89,12 +87,9 @@ class FixAveCorrelatePeratom : public Fix {
   int nsample;         // number of time samples in values ring
 
   int npair;           // number of correlation pairs to calculate
-  double *count;
-  double **corr;
+  double *local_count,*global_count,*save_count;
+  double **local_corr,**global_corr,**save_corr;
   int corr_length;
-   
-  double *save_count;     // saved values at Nfreq for output via compute_array()
-  double **save_corr;
   
   int ngroup_glo;
   tagint *group_ids;

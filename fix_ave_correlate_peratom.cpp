@@ -1039,8 +1039,8 @@ memory->grow(indices_group,ngroup_loc,"ave/correlate/peratomindices_group");
       fprintf(fp,BIGINT_FORMAT " %d\n",ntimestep,nrepeat);
       for (i = 0; i < corr_length/factor; i++) {
     if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED) {
-      int loc_bin = i%nrepeat;
-      int loc_ind = (i - loc_bin)/nrepeat;
+      int loc_bin = i%bins;
+      int loc_ind = (i - loc_bin)/bins;
       fprintf(fp,"%d %d %f %f",loc_ind+1,loc_ind*nevery,range/bins*loc_bin,save_count[i]);
     } else {
       fprintf(fp,"%d %d %f",i+1,i*nevery,save_count[i]);
@@ -1072,9 +1072,7 @@ memory->grow(indices_group,ngroup_loc,"ave/correlate/peratomindices_group");
     ftruncate(fileno(fp),fileend);
       }
     }
-  }
 
-  if (me == 0) {
     // output mean result to file
     if (mean_flag) {
       if (overwrite) fseek(mean_file,mean_filepos,SEEK_SET);
@@ -1426,6 +1424,7 @@ void FixAveCorrelatePeratom::calc_mean(int *indices_group, int ngroup_loc){
         // calculate correlation
         int ind = dV/range*bins;
         if(i==0) mean_count[ind]+=2.0;
+	printf("res_data[0]=%f\n",res_data[0]);
         mean[ind*nvalues+i] += res_data[0];
         mean[ind*nvalues+i] += res_data[1];
         delete[] res_data;

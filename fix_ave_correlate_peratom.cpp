@@ -29,6 +29,7 @@
 #include "fix_store.h"
 #include "input.h"
 #include "variable.h"
+#include "domain.h"
 #include "memory.h"
 #include "error.h"
 #include "force.h"
@@ -1123,14 +1124,14 @@ memory->grow(indices_group,ngroup_loc,"ave/correlate/peratomindices_group");
   memory->destroy(indices_group);
 
   // print timing
-  printf("processor %d: time(init_compute) = %f\n",me,time_init_compute);
-  printf("processor %d: time(calc+write_nvalues) = %f\n",me,calc_write_nvalues);
-  printf("processor %d: time(write_var) = %f\n",me,write_var);
-  printf("processor %d: time(write_orthogonal) = %f\n",me,write_orthogonal);
-  printf("processor %d: time(reduce_write_global) = %f\n",me,reduce_write_global);
-  printf("processor %d: time(calc) = %f\n",me,time_calc);
-  printf("processor %d: time(red_calc) = %f\n",me,time_red_calc);
-  printf("processor %d: time(total) = %f\n",me,time_total);
+  //printf("processor %d: time(init_compute) = %f\n",me,time_init_compute);
+  //printf("processor %d: time(calc+write_nvalues) = %f\n",me,calc_write_nvalues);
+  //printf("processor %d: time(write_var) = %f\n",me,write_var);
+  //printf("processor %d: time(write_orthogonal) = %f\n",me,write_orthogonal);
+  //printf("processor %d: time(reduce_write_global) = %f\n",me,reduce_write_global);
+  //printf("processor %d: time(calc) = %f\n",me,time_calc);
+  //printf("processor %d: time(red_calc) = %f\n",me,time_red_calc);
+  //printf("processor %d: time(total) = %f\n",me,time_total);
 }
 
 /* ----------------------------------------------------------------------
@@ -1235,8 +1236,8 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
         dr[0] = variable_store[inda][m] - variable_store[indb][n];
         dr[1] = variable_store[inda][m+nsave] - variable_store[indb][n+nsave];
         dr[2] = variable_store[inda][m+2*nsave] - variable_store[indb][n+2*nsave];
+	domain->minimum_image(dr[0],dr[1],dr[2]);
         double dV = sqrt( dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2]);
-        //printf("dV=%f\n",dV);
         if(dV<range){
           double *res_data = new double[8];
           double *inp_data = new double[6];
@@ -1290,6 +1291,7 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
         dr[0] = variable_store[inda][m] - variable_store[indb][n];
         dr[1] = variable_store[inda][m+nsave] - variable_store[indb][n+nsave];
         dr[2] = variable_store[inda][m+2*nsave] - variable_store[indb][n+2*nsave];
+	domain->minimum_image(dr[0],dr[1],dr[2]);
         double dV = sqrt( dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2]);
         //printf("dV=%f\n",dV);
         if(dV<range){
@@ -1410,6 +1412,7 @@ void FixAveCorrelatePeratom::calc_mean(int *indices_group, int ngroup_loc){
       dr[0] = variable_store[inda][lastindex] - variable_store[indb][lastindex];
       dr[1] = variable_store[inda][lastindex+nsave] - variable_store[indb][lastindex+nsave];
       dr[2] = variable_store[inda][lastindex+2*nsave] - variable_store[indb][lastindex+2*nsave];
+      domain->minimum_image(dr[0],dr[1],dr[2]);
       double dV = sqrt( dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2]);
 
       //printf("dV=%f\n",dV);
@@ -1424,7 +1427,6 @@ void FixAveCorrelatePeratom::calc_mean(int *indices_group, int ngroup_loc){
         // calculate correlation
         int ind = dV/range*bins;
         if(i==0) mean_count[ind]+=2.0;
-	printf("res_data[0]=%f\n",res_data[0]);
         mean[ind*nvalues+i] += res_data[0];
         mean[ind*nvalues+i] += res_data[1];
         delete[] res_data;

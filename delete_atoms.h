@@ -31,6 +31,7 @@ class DeleteAtoms : protected Pointers {
   void command(int, char **);
 
  private:
+  int me,nprocs;
   int *dlist;
   int count;
   int compress_flag,bond_flag,mol_flag;

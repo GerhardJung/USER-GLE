@@ -123,11 +123,16 @@ void PairLJOff::compute(int eflag, int vflag)
 //	printf("dist = %f, eff.dist = %f, fpair = %f\n",r,r-r_offset[itype][jtype],fpair);
 	if (!evflag) if(r<r_offset[itype][jtype]){
 	  printf("distance = %f < offset = %f !\n",r,r_offset[itype][jtype]);
-	  error->all(FLERR,"distance between particles too small\n");
+	  error->all(FLERR,"Distance between particles too small");
 	}
+	
+	
         f[i][0] += delx*fpair;
         f[i][1] += dely*fpair;
         f[i][2] += delz*fpair;
+	
+	//printf ("neigh: %f %f %f\n",delx*fpair,dely*fpair,delz*fpair);
+	
 //	if ( r < 1.1001 + r_offset[itype][jtype] && r > 1.1000 + r_offset[itype][jtype] ) {
 //	  printf("dist = %f, f^2 = %f\n",r,delx*fpair*delx*fpair+dely*fpair*dely*fpair+delz*fpair*delz*fpair);
 //	}  
@@ -145,6 +150,8 @@ void PairLJOff::compute(int eflag, int vflag)
 
         if (evflag) ev_tally(i,j,nlocal,newton_pair,
                              evdwl,0.0,fpair,delx,dely,delz);
+	
+	//printf("neighbor: %d %d %f %f %f\n",i,j,r,fpair,evdwl);
       }
     }
   }

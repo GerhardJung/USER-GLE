@@ -184,7 +184,9 @@ void DeleteAtoms::delete_group(int narg, char **arg)
 
   int igroup = group->find(arg[1]);
   if (igroup == -1) error->all(FLERR,"Could not find delete_atoms group ID");
-  
+ 
+  MPI_Comm_rank(world,&me);
+  MPI_Comm_size(world,&nprocs);
   
   options(narg-2,&arg[2]);
 
@@ -198,11 +200,13 @@ void DeleteAtoms::delete_group(int narg, char **arg)
   int groupbit = group->bitmask[igroup];
   int local_count = 0;
   for (int i = 0; i < nlocal; i++)
-    if (mask[i] & groupbit)
-      if (count >= 0 && local_count < count){
+    if (mask[i] & groupbit){
+      if (count == -1) dlist[i] = 1;
+      if (count >= 0 && local_count < count && me == 0){
 	dlist[i] = 1;
 	local_count++;
       }
+    }
 }
 
 /* ----------------------------------------------------------------------

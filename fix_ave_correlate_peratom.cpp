@@ -731,8 +731,14 @@ memory->grow(indices_group,ngroup_loc,"ave/correlate/peratomindices_group");
     } else if (which[i] == FIX) {
       if (argindex[i] == 0)
     peratom_data= modify->fix[v]->vector_atom;
-      else
-    peratom_data= modify->fix[v]->array_atom[i-1];
+      else{
+	memory->create(peratom_data, nlocal, "ave/correlation/peratom:peratom_data");
+	for (a= 0; a < nlocal; a++) {
+	  peratom_data[a] = modify->fix[v]->array_atom[a][argindex[i]-1];
+	}
+      }
+    
+    
 
     // evaluate equal-style variable
     } else {
@@ -762,7 +768,7 @@ memory->grow(indices_group,ngroup_loc,"ave/correlate/peratomindices_group");
     }
 
     //if this was done by an atom-style variable, we need to free the mem we allocated
-    if (which[i] == VARIABLE) {
+    if (which[i] == VARIABLE || which[i] == FIX ) {
       memory->destroy(peratom_data);
     }
   }

@@ -34,21 +34,24 @@ class FixAddNsq : public Fix {
   void min_setup(int);
   void post_force(int);
   void min_post_force(int);
-  double compute_scalar();
-  double compute_vector(int);
   double memory_usage();
 
  private:
-  int me;
+  int me,nmax;
   // information of atoms in the group
   int ngroup_glo;
   tagint *group_ids;
   int *indices_group;
   
+  int checkpoint; //indice after which the force will be computed (for printout)
+  
   // global atom data (position)
   double **group_x;
-  // calculated force
+  double **group_x_loc;
+  // calculated force/energy/virial
   double **group_f;
+  double **group_e;
+  double **group_v;
   
   // potential list to calculate
   int n_pot;
@@ -57,6 +60,9 @@ class FixAddNsq : public Fix {
   
   void calc_ljoff(int i, int j, int p, double rsq, double &pair_force, double &energy);
   void calc_harmonic(int i, int j, int p, double rsq, double &pair_force, double &energy);
+  
+  double **array;
+
 };
 
 }

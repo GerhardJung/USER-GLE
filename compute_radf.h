@@ -34,11 +34,13 @@ class ComputeRADF : public Compute {
   void compute_array();
 
  private:
-  int nbin;              // # of rdf bins
-  int npairs;            // # of rdf pairs
+  int nbin_r;            // # of radial radf bins
+  int nbin_a;            // # of angular radf bins
+  int npairs;            // # of radf pairs
   double delr,delrinv;   // bin width and its inverse
-  int ***rdfpair;        // map 2 type pair to rdf pair for each histo
-  int **nrdfpair;        // # of histograms for each type pair
+  double dela,delainv;   // bin width and its inverse
+  int ***radfpair;        // map 2 type pair to radf pair for each histo
+  int **nradfpair;        // # of histograms for each type pair
   int *ilo,*ihi,*jlo,*jhi;
   double **hist;         // histogram bins
   double **histall;      // summed histogram bins across all procs
@@ -46,6 +48,9 @@ class ComputeRADF : public Compute {
   int *typecount;
   int *icount,*jcount;
   int *duplicates;
+  
+  int max_icount;
+  double **ilist_x;
 
   class NeighList *list; // half neighbor list
 };
@@ -63,7 +68,7 @@ Self-explanatory.  Check the input script syntax and compare to the
 documentation for the command.  You can use -echo screen as a
 command-line option when running LAMMPS to see the offending line.
 
-E: Compute rdf requires a pair style be defined
+E: Compute radf requires a pair style be defined
 
 Self-explanatory.
 

@@ -34,7 +34,7 @@
 #include "comm.h"
 #include "input.h"
 #include "variable.h"
-#include "random_mars.h"
+#include "random_correlated.h"
 #include "memory.h"
 #include "error.h"
 #include "group.h"
@@ -53,7 +53,7 @@ enum{CONSTANT,EQUAL,ATOM};
 FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   Fix(lmp, narg, arg)
 {
-  if (narg < 7) error->all(FLERR,"Illegal fix langevin command");
+  if (narg < 8) error->all(FLERR,"Illegal fix langevin command");
 
   dynamic_group_allow = 1;
   scalar_flag = 1;
@@ -64,20 +64,25 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   t_start = force->numeric(FLERR,arg[3]);
   t_target = t_start;
   tstyle = CONSTANT;
-
-
   t_stop = force->numeric(FLERR,arg[4]);
-  t_period = force->numeric(FLERR,arg[5]);
-  seed = force->inumeric(FLERR,arg[6]);
+  t_period=1;
+  
+  mem_count = force->numeric(FLERR,arg[6]);
+  mem_file = fopen(arg[5],"r");
+  mem_kernel = new double[mem_count];
+  read_mem_file();
+  
+  
+  seed = force->inumeric(FLERR,arg[7]);
 
   if (t_period <= 0.0) error->all(FLERR,"Fix langevin period must be > 0.0");
   if (seed <= 0) error->all(FLERR,"Illegal fix langevin command");
   
   
 
-  // initialize Marsaglia RNG with processor-unique seed
+  // initialize correlated RNG with processor-unique seed
 
-  random = new RanMars(lmp,seed + comm->me);
+  random = new RanCor(lmp,seed + comm->me, mem_count, mem_kernel);
 
   // allocate per-type arrays for force prefactors
 
@@ -132,6 +137,36 @@ int FixGLE::setmask()
 
 /* ---------------------------------------------------------------------- */
 
+
+void FixGLE::read_mem_file()
+{
+  // skip first lines starting with #
+  char buf[0x1000];
+  long filepos;
+  filepos = ftell(mem_file);
+  while (fgets(buf, sizeof(buf), mem_file) != NULL) {
+    if (buf[0] != '#') {
+      fseek(mem_file,filepos,SEEK_SET);
+      break;
+    }
+    filepos = ftell(mem_file);
+  } 
+  
+  //read memory
+  int i;
+  double t,t_old, mem;
+  t = t_old = mem = 0;
+  for(i=0; i<mem_count; i++){
+    t_old = t;
+    fscanf(mem_file,"%lf %lf\n",&t,&mem);
+    if (t - t_old - update->dt > 10E-10) error->all(FLERR,"memory needs resolution similar to timestep");
+    mem_kernel[i] = mem;
+  }
+  
+}
+
+/* ---------------------------------------------------------------------- */
+
 void FixGLE::init()
 {
 
@@ -182,9 +217,9 @@ void FixGLE::post_force(int vflag)
       gamma1 = gfactor1[type[i]];
       gamma2 = gfactor2[type[i]] * tsqrt;
 
-      fran[0] = gamma2*(random->uniform()-0.5);
-      fran[1] = gamma2*(random->uniform()-0.5);
-      fran[2] = gamma2*(random->uniform()-0.5);
+      fran[0] = gamma2;
+      fran[1] = gamma2;
+      fran[2] = gamma2;
 
       fdrag[0] = gamma1*v[i][0];
       fdrag[1] = gamma1*v[i][1];

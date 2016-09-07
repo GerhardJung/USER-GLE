@@ -46,7 +46,11 @@ class FixGLE : public Fix {
 
  protected:
   int flangevin_allocated;
-  double t_start,t_stop,t_period,t_target;
+  double t_start,t_period,t_stop,t_target;
+  int mem_count;
+  FILE * mem_file;
+  double *mem_kernel;
+  double mem_dt;
   double *gfactor1,*gfactor2,*ratio;
   double energy,energy_onestep;
   double tsqrt;
@@ -60,11 +64,11 @@ class FixGLE : public Fix {
   char *id_temp;
   class Compute *temperature;
 
-  int nlevels_respa;
-  class RanMars *random;
+  class RanCor *random;
   int seed;
 
   void compute_target();
+  void read_mem_file();
 };
 
 }

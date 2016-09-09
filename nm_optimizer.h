@@ -259,7 +259,7 @@ class NelderMeadOptimizer {
 	  extr_values[1] = 0.0;
 	  extr_values[2] = 0.0;
 	  
-	  for (int i = 0; i<dimension; i++) {
+	  for (int i = 0; i<dimension+1; i++) {
 	    float val = f(vectors[i]);
 	    if (val < extr_values[0]) {
 	      extr_values[0] = val;
@@ -303,7 +303,7 @@ class NelderMeadOptimizer {
 			float vworst = extr_values[2];
                         Vector second_worst = vectors[extr_ind[1]];
 			float vsworst = extr_values[1];
-			printf("best=%d/%f, sworst=%d/%f, worst=%d/%f\n",extr_ind[0],vbest,extr_ind[1],vsworst,extr_ind[2],vworst);
+			//printf("best=%d/%f, sworst=%d/%f, worst=%d/%f\n",extr_ind[0],vbest,extr_ind[1],vsworst,extr_ind[2],vworst);
                         // reflect
                         Vector reflected = cog + (cog - worst)*alpha;
 			float vreflected = f(reflected);
@@ -313,15 +313,15 @@ class NelderMeadOptimizer {
                             Vector expanded = cog + (cog - worst)*gamma;
 			    float vexpanded = f(expanded);
                             if (vexpanded < vreflected) {
-			      printf("expanded\n");
+			      //printf("expanded\n");
                                 vectors[extr_ind[2]] = expanded;
                             } else {
-			      printf("reflected1\n");
+			      //printf("reflected1\n");
                                 vectors[extr_ind[2]] = reflected;
                             }
 			} else if (vreflected <= vsworst) {
                             vectors[extr_ind[2]] = reflected;
-			    printf("reflected2\n");
+			    //printf("reflected2\n");
                         } else {
 			    if (vreflected < vworst ) {
 			      vectors[extr_ind[2]] = reflected;
@@ -332,14 +332,14 @@ class NelderMeadOptimizer {
 			    h.prepare(dimension);
 			    Vector contracted = cog + (worst - cog)*beta;
                             if (f(contracted) > vworst) {
-			      	printf("rescaled\n");
+			      	//printf("rescaled\n");
                                 for (int i=0; i<dimension+1; i++) {
                                     vectors[i] = (vectors[i]+best)/2.0;
                                 }
                                 
                             } else {
 				vectors[extr_ind[2]] = contracted;
-				printf("contracted\n");
+				//printf("contracted\n");
                             }
                         }
                         if (counter%100==0)

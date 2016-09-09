@@ -52,7 +52,7 @@ void RanCor::init()
   a_coeff = new float[mem_count];
   for (i=0; i< mem_count; i++) a_coeff[i]=0.0;
   
-  for (int step = 20; step <= mem_count; step+=10) {
+  for (int step = 10; step <= mem_count; step+=10) {
     NelderMeadOptimizer opt(step, precision, mem_kernel);
   
     // request a simplex to start with

@@ -186,12 +186,12 @@ class NelderMeadOptimizer {
             sigma = 0.5;
             this->termination_distance = termination_distance;
 	    this->target_function = target_function;
-	    db.init(dimension,target_function);
 	    //for (int i=0; i<dimension;i++) printf("target: %f\n",target_function[i]);
+	    extr_vectors = new int[3];
         }
         // used in `step` to sort the vectors
         bool operator()(const Vector& a, const Vector& b) {
-            return db.lookup(a) < db.lookup(b);
+            return f(a) < f(b);
         }
         // termination criteria: each pair of vectors in the simplex has to
         // have a distance of at most `termination_distance`
@@ -217,7 +217,6 @@ class NelderMeadOptimizer {
         }
         void insert(Vector vec, float score) {
             if (vectors.size() < dimension+1) {
-		db.insert(vec, score);
                 vectors.push_back(vec);
             }
         }
@@ -240,9 +239,35 @@ class NelderMeadOptimizer {
 	    printf("\n");
 	  }
 	}
-        Vector step(Vector vec, float score) {
+	float f(Vector v){
+	  float sum=0.0;
+	  int n,s;
+	  for(n=0;n<dimension;n++){
+	    float loc_sum = 0.0;
+	    for(s=0;s<dimension;s++){
+	      if(n+s>=dimension) continue;
+	      loc_sum += v[s]*v[s+n];
+	    }
+	  loc_sum -= target_function[n];
+	  sum += loc_sum*loc_sum;
+	  }
+	  return sum;
+	}
+	void find_vectors(){
+	  float smallest = 999999;
+	  float slargest = 0.0;
+	  float largest = 0.0;
 	  
-            db.insert(vec, score);
+	  for (int i = 0; i<dimension; i++) {
+	    
+	  }
+	  
+	  extr_vectors[0] = 0;
+	  extr_vectors[1] = 1;
+	  extr_vectors[2] = 2;
+	  
+	}
+        Vector step(Vector vec, float score) {
             try {
                 if (vectors.size() < dimension+1) {
                     vectors.push_back(vec);
@@ -253,7 +278,7 @@ class NelderMeadOptimizer {
 		  int counter = 0;
                     while(!done()) {
 		      //print_comp(vectors[0]);
-                        sort(vectors.begin(), vectors.end(), *this);
+                        find_vectors();
                         Vector cog; // center of gravity
                         cog.prepare(dimension);
                         for (int i = 0; i<dimension; i++) {
@@ -329,17 +354,13 @@ class NelderMeadOptimizer {
         }
         void restart() {
 	  vectors.clear();
-	  db.reset();
 	  
 	}
     private:
-        float f(Vector vec) {
-            return db.lookup(vec);
-        }
-        ValueDB db;
         int dimension;
         float alpha, gamma, beta, sigma;
         float termination_distance;
         vector<Vector> vectors;
+	int *extr_vectors;
 	double *target_function;
 };

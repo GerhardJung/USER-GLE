@@ -116,8 +116,8 @@ void RanCor::init_opt(NelderMeadOptimizer &opt, Vector v, int dimension) {
   
   opt.insert(v,min_function(v,dimension));
   
-  double p = 1.0/(dimension*sqrt(2))*(sqrt(dimension+1)+dimension-1);
-  double q = 1.0/(dimension*sqrt(2))*(sqrt(dimension+1)-1);
+  double p = 0.01/(dimension*sqrt(2))*(sqrt(dimension+1)+dimension-1);
+  double q = 0.01/(dimension*sqrt(2))*(sqrt(dimension+1)-1);
 
   int d,i;
   for (i=0; i<dimension; i++) {

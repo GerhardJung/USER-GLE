@@ -129,10 +129,17 @@ private:
 class ValueDB {
     public:
         ValueDB() {
+	  
+        }
+        void init(int dimension, double *target_function) {
+	  this->dimension = dimension;
+          this->target_function = target_function;
         }
         float lookup(Vector vec) {
             if (!contains(vec)) {
-                throw vec;
+		float score = calc_score(vec);
+		insert(vec, score);
+		return score;
             } else {
                 return values[vec];
             }
@@ -140,17 +147,37 @@ class ValueDB {
         void insert(Vector vec, float value) {
             values[vec] = value;
         }
+        
+        void reset() {
+	  values.clear();
+	}
+	float calc_score(Vector v){
+	  float sum=0.0;
+	  int n,s;
+	  for(n=0;n<dimension;n++){
+	    float loc_sum = 0.0;
+	    for(s=0;s<dimension;s++){
+	      if(n+s>=dimension) continue;
+	      loc_sum += v[s]*v[s+n];
+	    }
+	  loc_sum -= target_function[n];
+	  sum += loc_sum*loc_sum;
+	  }
+	  return sum;
+	}
     private:
         bool contains(Vector vec) {
             map<Vector, float>::iterator it = values.find(vec); 
             return it != values.end();
         }
         map<Vector, float> values;
+	int dimension;
+	double *target_function;
 };
 
 class NelderMeadOptimizer {
     public:
-        NelderMeadOptimizer(int dimension, float termination_distance=0.001) {
+        NelderMeadOptimizer(int dimension, float termination_distance, double *target_function) {
             this->dimension = dimension;
             srand(time(NULL));
             alpha = 1;
@@ -158,6 +185,9 @@ class NelderMeadOptimizer {
             beta = 0.5;
             sigma = 0.5;
             this->termination_distance = termination_distance;
+	    this->target_function = target_function;
+	    db.init(dimension,target_function);
+	    //for (int i=0; i<dimension;i++) printf("target: %f\n",target_function[i]);
         }
         // used in `step` to sort the vectors
         bool operator()(const Vector& a, const Vector& b) {
@@ -166,25 +196,52 @@ class NelderMeadOptimizer {
         // termination criteria: each pair of vectors in the simplex has to
         // have a distance of at most `termination_distance`
         bool done() {
-            if (vectors.size() < dimension) {
+            if (vectors.size() < dimension + 1) {
                 return false;
             }
-            for (int i=0; i<dimension+1; i++) {
-                for (int j=0; j<dimension+1; j++) {
-                    if (i==j) continue;
-                    if ((vectors[i]-vectors[j]).length() > termination_distance) {
-                        return false;
-                    }
-                }
-            }
-            return true;
+            float mean = 0.0;
+	    for (int i=0; i<dimension+1; i++) {
+	      mean += f(vectors[i]);
+	    }
+	    mean /= dimension +1;
+	    double var = 0.0;
+	    for (int i=0; i<dimension+1; i++) {
+	      double val = f(vectors[i]);
+	      var += (val-mean)*(val-mean);
+	    }
+	    var /= dimension;
+	    var = sqrt(var);
+
+	    if (var < termination_distance) return true;
+	    else return false;
         }
-        void insert(Vector vec) {
+        void insert(Vector vec, float score) {
             if (vectors.size() < dimension+1) {
+		db.insert(vec, score);
                 vectors.push_back(vec);
             }
         }
+        void print_comp(Vector best) {
+	    for(int n=0;n<dimension;n++){
+	    float loc_sum = 0.0;
+	      for(int s=0;s<dimension;s++){
+		if(n+s>=dimension) continue;
+		loc_sum += best[s]*best[s+n];
+	      }
+	      printf("%d %f %f\n",n,target_function[n],loc_sum);
+	    }
+	}
+        void print_v() {
+	  int n,i;
+	  for ( i=0; i<vectors.size(); i++ ) {
+	    for ( n=0; n<dimension; n++) {
+	      printf("%f ",vectors[i][n]);
+	    }
+	    printf("\n");
+	  }
+	}
         Vector step(Vector vec, float score) {
+	  
             db.insert(vec, score);
             try {
                 if (vectors.size() < dimension+1) {
@@ -193,12 +250,15 @@ class NelderMeadOptimizer {
 
                 // otherwise: optimize!
                 if (vectors.size() == dimension+1) {
+		  int counter = 0;
                     while(!done()) {
+		      //print_comp(vectors[0]);
                         sort(vectors.begin(), vectors.end(), *this);
                         Vector cog; // center of gravity
                         cog.prepare(dimension);
                         for (int i = 0; i<dimension; i++) {
                             cog += vectors[i];
+			    //printf("score=%f\n",f(vectors[i]));
                         }
                         cog /= dimension;
                         Vector best = vectors[0];
@@ -207,33 +267,42 @@ class NelderMeadOptimizer {
                         // reflect
                         Vector reflected = cog + (cog - worst)*alpha;
 			if (f(reflected) < f(best)) {
+			  //print_comp(reflected);
 			    // expand
                             Vector expanded = cog + (cog - worst)*gamma;
                             if (f(expanded) < f(reflected)) {
+			      //printf("expanded\n");
                                 vectors[dimension] = expanded;
                             } else {
+			      //printf("reflected1\n");
                                 vectors[dimension] = reflected;
                             }
-			} else if (f(reflected) < f(second_worst)) {
+			} else if (f(reflected) <= f(second_worst)) {
                             vectors[dimension] = reflected;
+			    //printf("reflected2\n");
                         } else {
+			    if (f(reflected) < f(worst) ) {
+			      vectors[dimension] = reflected;
+			      worst = vectors[dimension];
+			    }
 			    // contract
 			    Vector h;
 			    h.prepare(dimension);
-			    if (f(reflected) < f(worst) ) {
-			      h = reflected;
-			    } else {
-			      h = worst;
-			    }
-			    Vector contracted = cog*beta + h*(1 - beta);
-                            if (f(contracted) < f(worst)) {
-                                vectors[dimension] = contracted;
-                            } else {
+			    Vector contracted = cog + (worst - cog)*beta;
+                            if (f(contracted) > f(worst)) {
+			      	//printf("rescaled\n");
                                 for (int i=0; i<dimension; i++) {
-                                    vectors[i] = best*sigma + vectors[i]*(1 - sigma);
+                                    vectors[i] = (vectors[i]+best)/2.0;
                                 }
+                                
+                            } else {
+				vectors[dimension] = contracted;
+				//printf("contracted\n");
                             }
                         }
+                        if (counter%100==0)
+			  printf("count %d: best value: %f\n",counter,f(best));
+			counter++;
                     }
 
                     // algorithm is terminating, output: simplex' center of gravity
@@ -250,7 +319,7 @@ class NelderMeadOptimizer {
                     Vector result;
                     result.prepare(dimension);
                     for (int i = 0; i<dimension; ++i) {
-                        result[i] = 0.001*(rand()%1000)-0.5;
+                        result[i] = 0.001*(rand()%1000);
                     }
                     return result;
                 }
@@ -258,13 +327,19 @@ class NelderMeadOptimizer {
                 return v;
             }
         }
+        void restart() {
+	  vectors.clear();
+	  db.reset();
+	  
+	}
     private:
         float f(Vector vec) {
             return db.lookup(vec);
         }
+        ValueDB db;
         int dimension;
         float alpha, gamma, beta, sigma;
         float termination_distance;
         vector<Vector> vectors;
-        ValueDB db;
+	double *target_function;
 };

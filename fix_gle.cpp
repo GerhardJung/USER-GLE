@@ -80,9 +80,13 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   if (seed <= 0) error->all(FLERR,"Illegal fix langevin command");
   
   // initialize correlated RNG with processor-unique seed
-  
+  double norm = mem_kernel[0];
+  for (int i=0; i<mem_count; i++) {
+    mem_kernel[i]/=norm;
+  }
+
   random = new RanMars(lmp,seed + comm->me);
-  precision = 0.005;
+  precision = 0.000001;
   random_correlator = new RanCor(lmp,mem_count, mem_kernel, precision);
   
   // allocate and init per-atom arrays (velocity and normal random number)

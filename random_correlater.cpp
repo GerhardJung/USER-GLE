@@ -32,6 +32,7 @@ RanCor::RanCor(LAMMPS *lmp, int mem_count, double *mem_kernel, double precision)
   this->precision = precision;
   
   // init the coefficients for the correlation and the memory for the uncorrelated random numbers
+  srand(time(NULL));
   init();
 }
 
@@ -49,28 +50,42 @@ void RanCor::init()
   int i,n,s;
   
   a_coeff = new float[mem_count];
-  for (i=0; i< mem_count; i++) a_coeff[i]=0.5;
+  for (i=0; i< mem_count; i++) a_coeff[i]=0.0;
   
-  NelderMeadOptimizer opt(mem_count, precision);
+  for (int step = 10; step <= mem_count; step+=10) {
+    NelderMeadOptimizer opt(step, precision, mem_kernel);
   
-  // request a simplex to start with
-  Vector v(a_coeff,mem_count);
+    // request a simplex to start with
+    Vector v(a_coeff,step);
+    for (i=0; i< step; i++) printf("%f ",v[i]);
+      printf("\n");
 
-  while (!opt.done()) {
-    //printf("%f %f %f %f %f %f %f\n",v[0],v[1],v[2],v[3],v[4],v[5],f(v));
-    v = opt.step(v, min_function(v));
+    init_opt(opt,v,step);
+    //opt.print_v();
+
+      while (!opt.done()) {
+	v = opt.step(v, min_function(v,step));
+	printf("optimizer quality: %f\n",min_function(v,step));
+      }
+  
+    for ( i=0; i < step; i++ ) a_coeff[i] = v[i];
+  
+    for(n=0;n<mem_count;n++){
+      float loc_sum = 0.0;
+      for(s=0;s<mem_count;s++){
+	if(n+s>=mem_count) continue;
+	loc_sum += a_coeff[s]*a_coeff[s+n];
+      }
+    
+      printf("%d %f %f\n",n,mem_kernel[n],loc_sum);
+    }
+  
+    for (i=0; i< step; i++) printf("%f ",v[i]);
+    printf("\n");
+
   }
   
-  for ( i=0; i < mem_count; i++ ) a_coeff[i] = v[i];
   
-  /* for(n=0;n<mem_count;n++){
-    float loc_sum = 0.0;
-    for(s=0;s<mem_count;s++){
-      if(n+s>=mem_count) continue;
-      loc_sum += v[s]*v[s+n];
-    }
-    printf("%d %f %f\n",n,mem_kernel[n],loc_sum);
-  } */
   
 }
 
@@ -94,17 +109,46 @@ double RanCor::gaussian(double* normal, int lastindex)
 }
 
 /* ---------------------------------------------------------------------- 
+  initializes the nm optimizer
+  ----------------------------------------------------------------------  */
+
+void RanCor::init_opt(NelderMeadOptimizer &opt, Vector v, int dimension) {
+  
+  opt.insert(v,min_function(v,dimension));
+  
+  double p = 1.0/(dimension*sqrt(2))*(sqrt(dimension+1)+dimension-1);
+  double q = 1.0/(dimension*sqrt(2))*(sqrt(dimension+1)-1);
+
+  int d,i;
+  for (i=0; i<dimension; i++) {
+    Vector new_v(a_coeff,dimension);
+    for (d=0; d<dimension; d++) {
+      if (d!=i) {
+	new_v[d] += q;
+      } else {
+	new_v[d] += p;
+      }
+    }
+
+    opt.insert(new_v,min_function(new_v,dimension));
+  }
+ 
+}
+ 
+
+
+/* ---------------------------------------------------------------------- 
   function for the minimization process to determine correlation coefficients
   ----------------------------------------------------------------------  */
 
-float RanCor::min_function(Vector v)
+float RanCor::min_function(Vector v, int dimension)
 {
   float sum=0.0;
   int n,s;
-  for(n=0;n<mem_count;n++){
+  for(n=0;n<dimension;n++){
     float loc_sum = 0.0;
-    for(s=0;s<mem_count;s++){
-      if(n+s>=mem_count) continue;
+    for(s=0;s<dimension;s++){
+      if(n+s>=dimension) continue;
       loc_sum += v[s]*v[s+n];
     }
     loc_sum -= mem_kernel[n];
@@ -112,5 +156,3 @@ float RanCor::min_function(Vector v)
   }
   return sum;
 }
-
- 

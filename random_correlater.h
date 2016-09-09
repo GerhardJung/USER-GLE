@@ -33,7 +33,8 @@ class RanCor : protected Pointers {
   float *a_coeff;
   
   void init();
-  float min_function(Vector);
+  float min_function(Vector, int);
+  void init_opt(NelderMeadOptimizer &opt, Vector v, int);
   
   FILE * test_out;
   

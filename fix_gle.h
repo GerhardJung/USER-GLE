@@ -32,7 +32,6 @@ class FixGLE : public Fix {
   void init();
   void setup(int);
   virtual void post_force(int);
-  virtual void end_of_step();
   void reset_target(double);
   void reset_dt();
   int modify_param(int, char **);
@@ -45,13 +44,17 @@ class FixGLE : public Fix {
   int unpack_exchange(int, double *);
 
  protected:
+  double **save_velocity; //used to save peratom velocities
+  double **save_random; //used to save peratom random numbers
+  int lastindex;
+   
   int flangevin_allocated;
   double t_start,t_period,t_stop,t_target;
   int mem_count;
   FILE * mem_file;
   double *mem_kernel;
   double mem_dt;
-  double *gfactor1,*gfactor2,*ratio;
+  double *gfactor1,*gfactor2;
   double energy,energy_onestep;
   double tsqrt;
   int tstyle,tvar;
@@ -64,8 +67,10 @@ class FixGLE : public Fix {
   char *id_temp;
   class Compute *temperature;
 
-  class RanCor *random;
+  class RanMars *random;
+  class RanCor *random_correlator;
   int seed;
+  double precision;
 
   void compute_target();
   void read_mem_file();

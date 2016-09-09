@@ -15,23 +15,27 @@
 #define LMP_RANCOR_H
 
 #include "pointers.h"
+#include "nm_optimizer.h"
 
 namespace LAMMPS_NS {
 
 class RanCor : protected Pointers {
  public:
-  RanCor(class LAMMPS *, int, int, double*);
+  RanCor(class LAMMPS *, int, double*, double);
   ~RanCor();
-  void init();
+  double gaussian(double*, int);
 
  private:
-  int seed, mem_count;
+  int mem_count;
   double *mem_kernel;
   
-  class RanMars *random;
+  double precision;
+  float *a_coeff;
   
-  int precision;
-  double *a_coeff;
+  void init();
+  float min_function(Vector);
+  
+  FILE * test_out;
   
 };
 

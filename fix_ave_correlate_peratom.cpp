@@ -458,6 +458,8 @@ memory->grow(indices_group,ngroup_loc,"ave/correlate/peratomindices_group");
     }
   }
   MPI_Allreduce(&ngroup_loc, &ngroup_glo, 1, MPI_INT, MPI_SUM, world);
+  if ( ngroup_glo == 0 ) error->all(FLERR,"Illegal fix ave/correlate/peratom command: No group members");
+    
   MPI_Exscan(&ngroup_loc,&ngroup_scan,1,MPI_INT, MPI_SUM, world);
   //printf("local=%d, scan=%d, global=%d\n",ngroup_loc,ngroup_scan,ngroup_glo);
   if((type == AUTOCROSS || type == CROSS) && ngroup_glo < 2) error->all(FLERR,"Illegal fix ave/correlate/peratom command: Cross-correlation with only one particle");
@@ -584,6 +586,8 @@ FixAveCorrelatePeratom::~FixAveCorrelatePeratom()
   }
 
   if (fp && me == 0) fclose(fp);
+  
+  atom->delete_callback(id,0);
 
 }
 
@@ -1370,9 +1374,6 @@ void FixAveCorrelatePeratom::decompose(double *res_data, double *dr, double *inp
   delete[] F1_p;
   delete[] F2_p;
 
-  //if(res_data[0]==0.0){
-  //  printf("dr[0]=%f, dr[0]=%f, dr[0]=%f, inp_data[0]=%f, inp_data[1]=%f, inp_data[2]=%f\n",dr[0],dr[1],dr[2],inp_data[0],inp_data[1],inp_data[2]);
-  //}
 }
 
 /* ----------------------------------------------------------------------

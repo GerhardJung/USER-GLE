@@ -34,7 +34,8 @@
 #include "comm.h"
 #include "input.h"
 #include "variable.h"
-#include "random_correlated.h"
+#include "random_correlater.h"
+#include "random_mars.h"
 #include "memory.h"
 #include "error.h"
 #include "group.h"
@@ -45,9 +46,6 @@ using namespace FixConst;
 enum{NOBIAS,BIAS};
 enum{CONSTANT,EQUAL,ATOM};
 
-#define SINERTIA 0.4          // moment of inertia prefactor for sphere
-#define EINERTIA 0.2          // moment of inertia prefactor for ellipsoid
-
 /* ---------------------------------------------------------------------- */
 
 FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
@@ -55,11 +53,15 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
 {
   if (narg < 8) error->all(FLERR,"Illegal fix langevin command");
 
+  // set fix properties
+  
   dynamic_group_allow = 1;
   scalar_flag = 1;
   global_freq = 1;
   extscalar = 1;
   nevery = 1;
+  
+  // read input parameter
 
   t_start = force->numeric(FLERR,arg[3]);
   t_target = t_start;
@@ -72,24 +74,38 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   mem_kernel = new double[mem_count];
   read_mem_file();
   
-  
   seed = force->inumeric(FLERR,arg[7]);
-
+  
   if (t_period <= 0.0) error->all(FLERR,"Fix langevin period must be > 0.0");
   if (seed <= 0) error->all(FLERR,"Illegal fix langevin command");
   
-  
-
   // initialize correlated RNG with processor-unique seed
+  
+  random = new RanMars(lmp,seed + comm->me);
+  precision = 0.005;
+  random_correlator = new RanCor(lmp,mem_count, mem_kernel, precision);
+  
+  // allocate and init per-atom arrays (velocity and normal random number)
+  
+  save_velocity = NULL;
+  save_random = NULL;
+  comm->maxexchange_fix += 6*mem_count;
+  grow_arrays(atom->nmax);
+  atom->add_callback(0);
+  
+  lastindex = 0;
+  int nlocal= atom->nlocal, n, d,m;
+  for ( n=0; n<nlocal; n++ )
+    for ( d=0; d<3; d++ ) 
+      for ( m=0; m<mem_count; m++ ) {
+	save_velocity[n][d*mem_count+m] = 0.0;
+	save_random[n][d*mem_count+m] = 0.0;
+      }
 
-  random = new RanCor(lmp,seed + comm->me, mem_count, mem_kernel);
-
-  // allocate per-type arrays for force prefactors
-
+  // allocate and init per-type arrays for force prefactors
+  
   gfactor1 = new double[atom->ntypes+1];
   gfactor2 = new double[atom->ntypes+1];
-  ratio = new double[atom->ntypes+1];
-  for (int i = 1; i <= atom->ntypes; i++) ratio[i] = 1.0;
 
   // set temperature = NULL, user can override via fix_modify if wants bias
 
@@ -113,10 +129,12 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
 
 FixGLE::~FixGLE()
 {
+  comm->maxexchange_fix -= 6*mem_count;
+  atom->delete_callback(id,0);
   delete random;
+  delete random_correlator;
   delete [] gfactor1;
   delete [] gfactor2;
-  delete [] ratio;
   delete [] id_temp;
   memory->destroy(flangevin);
   memory->destroy(tforce);
@@ -129,8 +147,6 @@ int FixGLE::setmask()
 {
   int mask = 0;
   mask |= POST_FORCE;
-  mask |= POST_FORCE_RESPA;
-  mask |= END_OF_STEP;
   mask |= THERMO_ENERGY;
   return mask;
 }
@@ -174,12 +190,8 @@ void FixGLE::init()
 
   if (!atom->rmass) {
     for (int i = 1; i <= atom->ntypes; i++) {
-      gfactor1[i] = -atom->mass[i] / t_period / force->ftm2v;
-      gfactor2[i] = sqrt(atom->mass[i]) *
-        sqrt(24.0*force->boltz/t_period/update->dt/force->mvv2e) /
-        force->ftm2v;
-      gfactor1[i] *= 1.0/ratio[i];
-      gfactor2[i] *= 1.0/sqrt(ratio[i]);
+      gfactor1[i] = -atom->mass[i]*update->dt;
+      gfactor2[i] = sqrt(atom->mass[i]);
     }
   }
 
@@ -198,39 +210,57 @@ void FixGLE::setup(int vflag)
 
 void FixGLE::post_force(int vflag)
 {
+  int n,d,m;
   double gamma1,gamma2;
-
   double **v = atom->v;
   double **f = atom->f;
   int *type = atom->type;
   int *mask = atom->mask;
   int nlocal = atom->nlocal;
-
-
   double fdrag[3],fran[3];
-
+  
+  // update velocity and random number
+  for ( n=0; n<nlocal; n++ ) {
+    for ( d=0; d<3; d++ ) {
+      save_velocity[n][d*mem_count+lastindex] = v[n][d];
+      save_random[n][d*mem_count+lastindex] = random->gaussian();
+    }
+  }
 
   compute_target();
 
-  for (int i = 0; i < nlocal; i++) {
-    if (mask[i] & groupbit) {
-      gamma1 = gfactor1[type[i]];
-      gamma2 = gfactor2[type[i]] * tsqrt;
+  for ( n = 0; n < nlocal; n++) {
+    if (mask[n] & groupbit) {
+      gamma1 = gfactor1[type[n]];
+      gamma2 = gfactor2[type[n]] * tsqrt;
 
-      fran[0] = gamma2;
-      fran[1] = gamma2;
-      fran[2] = gamma2;
+      fran[0] = gamma2*random_correlator->gaussian(&save_random[n][0],lastindex);
+      fran[1] = gamma2*random_correlator->gaussian(&save_random[n][mem_count],lastindex);
+      fran[2] = gamma2*random_correlator->gaussian(&save_random[n][2*mem_count],lastindex);
 
-      fdrag[0] = gamma1*v[i][0];
-      fdrag[1] = gamma1*v[i][1];
-      fdrag[2] = gamma1*v[i][2];
+      double mem_sum;
+      int j;
+      for ( d=0; d<3; d++ ) {
+	mem_sum = 0.0;
+	j = lastindex;
+	for ( m=0; m<mem_count; m++ ) {
+	  mem_sum += save_velocity[n][d*mem_count+j]*mem_kernel[m];
+	  //if (n == 0 && d == 0) printf("%d %f %f\n",m,save_velocity[n][d*mem_count+j],mem_kernel[m]);
+	  j--;
+	  if (j < 0) j = mem_count -1;
+	}
+	fdrag[d] = gamma1*mem_sum;
+      }
 
-      f[i][0] += fdrag[0] + fran[0];
-      f[i][1] += fdrag[1] + fran[1];
-      f[i][2] += fdrag[2] + fran[2];
+      f[n][0] += fdrag[0] + fran[0];
+      f[n][1] += fdrag[1] + fran[1];
+      f[n][2] += fdrag[2] + fran[2];
 
     }
   }
+  
+  lastindex++;
+  if (lastindex==mem_count) lastindex=0;
 
 }
 
@@ -254,15 +284,6 @@ void FixGLE::compute_target()
  
 }
 
-/* ----------------------------------------------------------------------
-   tally energy transfer to thermal reservoir
-------------------------------------------------------------------------- */
-
-void FixGLE::end_of_step()
-{
-
-}
-
 /* ---------------------------------------------------------------------- */
 
 void FixGLE::reset_target(double t_new)
@@ -276,10 +297,7 @@ void FixGLE::reset_dt()
 {
   if (atom->mass) {
     for (int i = 1; i <= atom->ntypes; i++) {
-      gfactor2[i] = sqrt(atom->mass[i]) *
-        sqrt(24.0*force->boltz/t_period/update->dt/force->mvv2e) /
-        force->ftm2v;
-      gfactor2[i] *= 1.0/sqrt(ratio[i]);
+      gfactor2[i] = sqrt(atom->mass[i]);
     }
   }
 }
@@ -331,22 +349,21 @@ void *FixGLE::extract(const char *str, int &dim)
 }
 
 /* ----------------------------------------------------------------------
-   memory usage of tally array
+   memory usage of local atom-based array
 ------------------------------------------------------------------------- */
 
-double FixGLE::memory_usage()
-{
-  double bytes = 0.0;
+double FixGLE::memory_usage() {
+  double bytes = atom->nmax * 6 * mem_count * sizeof(double);
   return bytes;
 }
 
 /* ----------------------------------------------------------------------
-   allocate atom-based array for franprev
+   allocate atom-based array
 ------------------------------------------------------------------------- */
 
-void FixGLE::grow_arrays(int nmax)
-{
-  
+void FixGLE::grow_arrays(int nmax) {
+  memory->grow(save_velocity,nmax,3*mem_count,"fix/gle:save_velocity");
+  memory->grow(save_random,nmax,3*mem_count,"fix/gle:save_random");
 }
 
 /* ----------------------------------------------------------------------
@@ -364,7 +381,21 @@ void FixGLE::copy_arrays(int i, int j, int delflag)
 
 int FixGLE::pack_exchange(int i, double *buf)
 {
-  return nvalues;
+  int offset = 0;
+  int d,m;
+  // pack velocity
+  for ( m=0; m<mem_count; m++ ) {
+    for ( d=0; d<3; d++ ) { 
+      buf[offset++] = save_velocity[i][d+3*m];
+    }
+  }
+  
+  // pack random number
+  for ( m=0; m<mem_count; m++ ) {
+    buf[offset++] = save_random[i][m];
+  }
+  
+  return offset;
 }
 
 /* ----------------------------------------------------------------------
@@ -373,5 +404,19 @@ int FixGLE::pack_exchange(int i, double *buf)
 
 int FixGLE::unpack_exchange(int nlocal, double *buf)
 {
-  return nvalues;
+  int offset = 0;
+  int d,m;
+  // pack velocity
+  for ( m=0; m<mem_count; m++ ) {
+    for ( d=0; d<3; d++ ) { 
+      save_velocity[nlocal][d+3*m] = buf[offset++];
+    }
+  }
+  
+  // pack normal random number
+  for ( m=0; m<mem_count; m++ ) {
+    save_random[nlocal][m] = buf[offset++];
+  }
+  
+  return offset;
 }

@@ -187,7 +187,8 @@ class NelderMeadOptimizer {
             this->termination_distance = termination_distance;
 	    this->target_function = target_function;
 	    //for (int i=0; i<dimension;i++) printf("target: %f\n",target_function[i]);
-	    extr_vectors = new int[3];
+	    extr_ind = new int[3];
+	    extr_values = new float[3];
         }
         // used in `step` to sort the vectors
         bool operator()(const Vector& a, const Vector& b) {
@@ -254,18 +255,27 @@ class NelderMeadOptimizer {
 	  return sum;
 	}
 	void find_vectors(){
-	  float smallest = 999999;
-	  float slargest = 0.0;
-	  float largest = 0.0;
+	  extr_values[0] = 999999.0;
+	  extr_values[1] = 0.0;
+	  extr_values[2] = 0.0;
 	  
 	  for (int i = 0; i<dimension; i++) {
-	    
-	  }
-	  
-	  extr_vectors[0] = 0;
-	  extr_vectors[1] = 1;
-	  extr_vectors[2] = 2;
-	  
+	    float val = f(vectors[i]);
+	    if (val < extr_values[0]) {
+	      extr_values[0] = val;
+	      extr_ind[0] = i;
+	    }
+	    if (val > extr_values[1]) {
+	      extr_values[1] = val;
+	      extr_ind[1]=i;
+	    }
+	    if (val > extr_values[2]) {
+	      extr_values[1] = extr_values[2];
+	      extr_ind[1] = extr_ind[2];
+	      extr_values[2] = val;
+	      extr_ind[2]=i;
+	    }
+	  }  
 	}
         Vector step(Vector vec, float score) {
             try {
@@ -281,48 +291,55 @@ class NelderMeadOptimizer {
                         find_vectors();
                         Vector cog; // center of gravity
                         cog.prepare(dimension);
-                        for (int i = 0; i<dimension; i++) {
+                        for (int i = 0; i<dimension+1; i++) {
+			  if (i!=extr_ind[2])
                             cog += vectors[i];
 			    //printf("score=%f\n",f(vectors[i]));
                         }
                         cog /= dimension;
-                        Vector best = vectors[0];
-                        Vector worst = vectors[dimension];
-                        Vector second_worst = vectors[dimension-1];
+                        Vector best = vectors[extr_ind[0]];
+			float vbest = extr_values[0];
+                        Vector worst = vectors[extr_ind[2]];
+			float vworst = extr_values[2];
+                        Vector second_worst = vectors[extr_ind[1]];
+			float vsworst = extr_values[1];
+			printf("best=%d/%f, sworst=%d/%f, worst=%d/%f\n",extr_ind[0],vbest,extr_ind[1],vsworst,extr_ind[2],vworst);
                         // reflect
                         Vector reflected = cog + (cog - worst)*alpha;
-			if (f(reflected) < f(best)) {
+			float vreflected = f(reflected);
+			if (vreflected < vbest) {
 			  //print_comp(reflected);
-			    // expand
+			    //expand
                             Vector expanded = cog + (cog - worst)*gamma;
-                            if (f(expanded) < f(reflected)) {
-			      //printf("expanded\n");
-                                vectors[dimension] = expanded;
+			    float vexpanded = f(expanded);
+                            if (vexpanded < vreflected) {
+			      printf("expanded\n");
+                                vectors[extr_ind[2]] = expanded;
                             } else {
-			      //printf("reflected1\n");
-                                vectors[dimension] = reflected;
+			      printf("reflected1\n");
+                                vectors[extr_ind[2]] = reflected;
                             }
-			} else if (f(reflected) <= f(second_worst)) {
-                            vectors[dimension] = reflected;
-			    //printf("reflected2\n");
+			} else if (vreflected <= vsworst) {
+                            vectors[extr_ind[2]] = reflected;
+			    printf("reflected2\n");
                         } else {
-			    if (f(reflected) < f(worst) ) {
-			      vectors[dimension] = reflected;
-			      worst = vectors[dimension];
+			    if (vreflected < vworst ) {
+			      vectors[extr_ind[2]] = reflected;
+			      worst = vectors[extr_ind[2]];
 			    }
 			    // contract
 			    Vector h;
 			    h.prepare(dimension);
 			    Vector contracted = cog + (worst - cog)*beta;
-                            if (f(contracted) > f(worst)) {
-			      	//printf("rescaled\n");
-                                for (int i=0; i<dimension; i++) {
+                            if (f(contracted) > vworst) {
+			      	printf("rescaled\n");
+                                for (int i=0; i<dimension+1; i++) {
                                     vectors[i] = (vectors[i]+best)/2.0;
                                 }
                                 
                             } else {
-				vectors[dimension] = contracted;
-				//printf("contracted\n");
+				vectors[extr_ind[2]] = contracted;
+				printf("contracted\n");
                             }
                         }
                         if (counter%100==0)
@@ -361,6 +378,7 @@ class NelderMeadOptimizer {
         float alpha, gamma, beta, sigma;
         float termination_distance;
         vector<Vector> vectors;
-	int *extr_vectors;
+	int *extr_ind;
+	float *extr_values;
 	double *target_function;
 };

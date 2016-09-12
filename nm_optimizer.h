@@ -190,6 +190,10 @@ class NelderMeadOptimizer {
 	    extr_ind = new int[3];
 	    extr_values = new float[3];
         }
+        ~NelderMeadOptimizer() {
+	  delete [] extr_ind;
+	  delete [] extr_values;
+	}
         // used in `step` to sort the vectors
         bool operator()(const Vector& a, const Vector& b) {
             return f(a) < f(b);

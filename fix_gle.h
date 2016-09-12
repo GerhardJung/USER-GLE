@@ -46,8 +46,12 @@ class FixGLE : public Fix {
  protected:
   double **save_velocity; //used to save peratom velocities
   double **save_random; //used to save peratom random numbers
+  double **array;
   int lastindex;
-   
+  int nmax;
+  int restart;
+  double norm;
+  
   int flangevin_allocated;
   double t_start,t_period,t_stop,t_target;
   int mem_count;

@@ -49,9 +49,16 @@ void RanCor::init()
 {
   int i,n,s;
   
+  // rescale the memory to simplify the optimization
+  double norm = mem_kernel[0];
+  for (int i=0; i<mem_count; i++) {
+    mem_kernel[i]/=norm;
+  }
+  
   a_coeff = new float[mem_count];
   for (i=0; i< mem_count; i++) a_coeff[i]=0.0;
   
+  //optimize alpha-parameter for correlated noise
   for (int step = 10; step <= mem_count; step+=10) {
     NelderMeadOptimizer opt(step, precision, mem_kernel);
   
@@ -85,7 +92,20 @@ void RanCor::init()
 
   }
   
-  
+  // scale back the memory and the parameter
+  for (int i=0; i<mem_count; i++) {
+    mem_kernel[i]*=norm;
+    a_coeff[i] *= sqrt(norm);
+  }
+  for(n=0;n<mem_count;n++){
+    float loc_sum = 0.0;
+    for(s=0;s<mem_count;s++){
+      if(n+s>=mem_count) continue;
+      loc_sum += a_coeff[s]*a_coeff[s+n];
+    }
+    
+    printf("%d %f %f\n",n,mem_kernel[n],loc_sum);
+  }
   
 }
 
@@ -116,8 +136,8 @@ void RanCor::init_opt(NelderMeadOptimizer &opt, Vector v, int dimension) {
   
   opt.insert(v,min_function(v,dimension));
   
-  double p = 0.01/(dimension*sqrt(2))*(sqrt(dimension+1)+dimension-1);
-  double q = 0.01/(dimension*sqrt(2))*(sqrt(dimension+1)-1);
+  double p = 0.001/(dimension*sqrt(2))*(sqrt(dimension+1)+dimension-1);
+  double q = 0.001/(dimension*sqrt(2))*(sqrt(dimension+1)-1);
 
   int d,i;
   for (i=0; i<dimension; i++) {

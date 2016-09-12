@@ -31,6 +31,7 @@ class RanCor : protected Pointers {
   
   double precision;
   float *a_coeff;
+  double rho;
   
   void init();
   float min_function(Vector, int);

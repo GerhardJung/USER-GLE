@@ -55,11 +55,11 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
 
   // set fix properties
   
-  dynamic_group_allow = 1;
-  scalar_flag = 1;
   global_freq = 1;
-  extscalar = 1;
   nevery = 1;
+  peratom_freq = 1;
+  peratom_flag = 1;
+  size_peratom_cols = 6;
   
   // read input parameter
 
@@ -76,17 +76,22 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   
   seed = force->inumeric(FLERR,arg[7]);
   
+  // optional parameter
+  int restart = 0;
+  int iarg = 8;
+  while (iarg < narg) {
+    if (strcmp(arg[iarg],"restart") == 0) {
+      restart = 1;
+      iarg += 1;
+    }
+  }
+  
   if (t_period <= 0.0) error->all(FLERR,"Fix langevin period must be > 0.0");
   if (seed <= 0) error->all(FLERR,"Illegal fix langevin command");
   
   // initialize correlated RNG with processor-unique seed
-  double norm = mem_kernel[0];
-  for (int i=0; i<mem_count; i++) {
-    mem_kernel[i]/=norm;
-  }
-
   random = new RanMars(lmp,seed + comm->me);
-  precision = 0.000001;
+  precision = 0.00001;
   random_correlator = new RanCor(lmp,mem_count, mem_kernel, precision);
   
   // allocate and init per-atom arrays (velocity and normal random number)
@@ -126,6 +131,11 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   flangevin_allocated = 0;
   tforce = NULL;
   maxatom1 = maxatom2 = 0;
+  
+  //memory for force save
+  nmax = atom->nmax;
+  memory->create(array,nmax,6,"fix_gle:array");
+  array_atom = array;
 
 }
 
@@ -133,15 +143,18 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
 
 FixGLE::~FixGLE()
 {
-  comm->maxexchange_fix -= 6*mem_count;
+
   atom->delete_callback(id,0);
   delete random;
   delete random_correlator;
+  delete [] mem_kernel;
   delete [] gfactor1;
   delete [] gfactor2;
   delete [] id_temp;
   memory->destroy(flangevin);
   memory->destroy(tforce);
+  memory->destroy(save_random);
+  memory->destroy(save_velocity);
 
 }
 
@@ -194,8 +207,8 @@ void FixGLE::init()
 
   if (!atom->rmass) {
     for (int i = 1; i <= atom->ntypes; i++) {
-      gfactor1[i] = -atom->mass[i]*update->dt;
-      gfactor2[i] = sqrt(atom->mass[i]);
+      gfactor1[i] = -update->dt;
+      gfactor2[i] = 1;
     }
   }
 
@@ -231,6 +244,14 @@ void FixGLE::post_force(int vflag)
     }
   }
 
+  //prepare array to save force
+  if (atom->nlocal > nmax) {
+    nmax = atom->nmax;
+    memory->destroy(array);
+    memory->create(array,nmax,6,"fix_gle:array");
+    array_atom = array;
+  }
+
   compute_target();
 
   for ( n = 0; n < nlocal; n++) {
@@ -238,22 +259,27 @@ void FixGLE::post_force(int vflag)
       gamma1 = gfactor1[type[n]];
       gamma2 = gfactor2[type[n]] * tsqrt;
 
-      fran[0] = gamma2*random_correlator->gaussian(&save_random[n][0],lastindex);
-      fran[1] = gamma2*random_correlator->gaussian(&save_random[n][mem_count],lastindex);
-      fran[2] = gamma2*random_correlator->gaussian(&save_random[n][2*mem_count],lastindex);
+      array[n][0] = fran[0] = gamma2*random_correlator->gaussian(&save_random[n][0],lastindex);
+      array[n][1] = fran[1] = gamma2*random_correlator->gaussian(&save_random[n][mem_count],lastindex);
+      array[n][2] = fran[2] = gamma2*random_correlator->gaussian(&save_random[n][2*mem_count],lastindex);
 
       double mem_sum;
       int j;
       for ( d=0; d<3; d++ ) {
-	mem_sum = 0.0;
 	j = lastindex;
-	for ( m=0; m<mem_count; m++ ) {
+	mem_sum = save_velocity[n][d*mem_count+j]*mem_kernel[0]*0.5;
+	j--;
+	if (j < 0) j = mem_count -1;
+	
+	for ( m=1; m<mem_count-1; m++ ) {
+	  //if (m<10 && n==0 && d==0) printf("%d: %f * %f\n",m,save_velocity[n][d*mem_count+j],mem_kernel[m]);
 	  mem_sum += save_velocity[n][d*mem_count+j]*mem_kernel[m];
 	  //if (n == 0 && d == 0) printf("%d %f %f\n",m,save_velocity[n][d*mem_count+j],mem_kernel[m]);
 	  j--;
 	  if (j < 0) j = mem_count -1;
 	}
-	fdrag[d] = gamma1*mem_sum;
+	mem_sum += save_velocity[n][d*mem_count+j]*mem_kernel[mem_count-1]*0.5;
+	array[n][d+3] = fdrag[d] = gamma1*mem_sum;
       }
 
       f[n][0] += fdrag[0] + fran[0];
@@ -261,6 +287,7 @@ void FixGLE::post_force(int vflag)
       f[n][2] += fdrag[2] + fran[2];
 
     }
+    
   }
   
   lastindex++;
@@ -301,7 +328,7 @@ void FixGLE::reset_dt()
 {
   if (atom->mass) {
     for (int i = 1; i <= atom->ntypes; i++) {
-      gfactor2[i] = sqrt(atom->mass[i]);
+      gfactor2[i] = 1.0;
     }
   }
 }

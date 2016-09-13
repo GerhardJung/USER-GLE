@@ -16,6 +16,7 @@
 
 #include "pointers.h"
 #include "nm_optimizer.h"
+#include <complex>
 
 namespace LAMMPS_NS {
 
@@ -36,6 +37,10 @@ class RanCor : protected Pointers {
   void init();
   float min_function(Vector, int);
   void init_opt(NelderMeadOptimizer &opt, Vector v, int);
+  void init_acoeff();
+  
+  void forwardDFT(double *s, int N, double *a, double *b);
+  void inverseDFT(complex<double> *a_k, int N, float *a);
   
   FILE * test_out;
   

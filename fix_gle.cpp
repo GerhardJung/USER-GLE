@@ -91,7 +91,7 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   
   // initialize correlated RNG with processor-unique seed
   random = new RanMars(lmp,seed + comm->me);
-  precision = 0.00001;
+  precision = 0.000001;
   random_correlator = new RanCor(lmp,mem_count, mem_kernel, precision);
   
   // allocate and init per-atom arrays (velocity and normal random number)
@@ -102,14 +102,17 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   grow_arrays(atom->nmax);
   atom->add_callback(0);
   
-  lastindex = 0;
+  lastindex_v = lastindex_r  = 0;
   int nlocal= atom->nlocal, n, d,m;
   for ( n=0; n<nlocal; n++ )
-    for ( d=0; d<3; d++ ) 
+    for ( d=0; d<3; d++ ) {
       for ( m=0; m<mem_count; m++ ) {
 	save_velocity[n][d*mem_count+m] = 0.0;
-	save_random[n][d*mem_count+m] = 0.0;
       }
+      for ( m=0; m<2*mem_count; m++ ) {
+	save_random[n][d*2*mem_count+m] = 0.0;
+      }
+    }
 
   // allocate and init per-type arrays for force prefactors
   
@@ -239,8 +242,8 @@ void FixGLE::post_force(int vflag)
   // update velocity and random number
   for ( n=0; n<nlocal; n++ ) {
     for ( d=0; d<3; d++ ) {
-      save_velocity[n][d*mem_count+lastindex] = v[n][d];
-      save_random[n][d*mem_count+lastindex] = random->gaussian();
+      save_velocity[n][d*mem_count+lastindex_v] = v[n][d];
+      save_random[n][d*mem_count+lastindex_r] = random->gaussian();
     }
   }
 
@@ -259,22 +262,21 @@ void FixGLE::post_force(int vflag)
       gamma1 = gfactor1[type[n]];
       gamma2 = gfactor2[type[n]] * tsqrt;
 
-      array[n][0] = fran[0] = gamma2*random_correlator->gaussian(&save_random[n][0],lastindex);
-      array[n][1] = fran[1] = gamma2*random_correlator->gaussian(&save_random[n][mem_count],lastindex);
-      array[n][2] = fran[2] = gamma2*random_correlator->gaussian(&save_random[n][2*mem_count],lastindex);
+      array[n][0] = fran[0] = gamma2*random_correlator->gaussian(&save_random[n][0],lastindex_r);
+      array[n][1] = fran[1] = gamma2*random_correlator->gaussian(&save_random[n][2*mem_count],lastindex_r);
+      array[n][2] = fran[2] = gamma2*random_correlator->gaussian(&save_random[n][4*mem_count],lastindex_r);
 
       double mem_sum;
       int j;
       for ( d=0; d<3; d++ ) {
-	j = lastindex;
+	j = lastindex_v;
 	mem_sum = save_velocity[n][d*mem_count+j]*mem_kernel[0]*0.5;
 	j--;
 	if (j < 0) j = mem_count -1;
 	
 	for ( m=1; m<mem_count-1; m++ ) {
-	  //if (m<10 && n==0 && d==0) printf("%d: %f * %f\n",m,save_velocity[n][d*mem_count+j],mem_kernel[m]);
+	  //if (m<50 && n==0 && d==0) printf("%d: %f * %f\n",m,save_velocity[n][d*mem_count+j],mem_kernel[m]);
 	  mem_sum += save_velocity[n][d*mem_count+j]*mem_kernel[m];
-	  //if (n == 0 && d == 0) printf("%d %f %f\n",m,save_velocity[n][d*mem_count+j],mem_kernel[m]);
 	  j--;
 	  if (j < 0) j = mem_count -1;
 	}
@@ -290,8 +292,10 @@ void FixGLE::post_force(int vflag)
     
   }
   
-  lastindex++;
-  if (lastindex==mem_count) lastindex=0;
+  lastindex_v++;
+  if (lastindex_v==mem_count) lastindex_v=0;
+  lastindex_r++;
+  if (lastindex_r==2*mem_count) lastindex_r=0;
 
 }
 
@@ -394,7 +398,7 @@ double FixGLE::memory_usage() {
 
 void FixGLE::grow_arrays(int nmax) {
   memory->grow(save_velocity,nmax,3*mem_count,"fix/gle:save_velocity");
-  memory->grow(save_random,nmax,3*mem_count,"fix/gle:save_random");
+  memory->grow(save_random,nmax,6*mem_count,"fix/gle:save_random");
 }
 
 /* ----------------------------------------------------------------------
@@ -415,15 +419,17 @@ int FixGLE::pack_exchange(int i, double *buf)
   int offset = 0;
   int d,m;
   // pack velocity
-  for ( m=0; m<mem_count; m++ ) {
-    for ( d=0; d<3; d++ ) { 
-      buf[offset++] = save_velocity[i][d+3*m];
+  for ( d=0; d<3; d++ ) { 
+    for ( m=0; m<mem_count; m++ ) {
+      buf[offset++] = save_velocity[i][d*mem_count+m];
     }
   }
   
   // pack random number
-  for ( m=0; m<mem_count; m++ ) {
-    buf[offset++] = save_random[i][m];
+  for ( d=0; d<3; d++ ) { 
+    for ( m=0; m<2*mem_count; m++ ) {
+      buf[offset++] = save_random[i][d*2*mem_count+m];
+    }
   }
   
   return offset;
@@ -438,15 +444,17 @@ int FixGLE::unpack_exchange(int nlocal, double *buf)
   int offset = 0;
   int d,m;
   // pack velocity
-  for ( m=0; m<mem_count; m++ ) {
-    for ( d=0; d<3; d++ ) { 
-      save_velocity[nlocal][d+3*m] = buf[offset++];
+  for ( d=0; d<3; d++ ) { 
+    for ( m=0; m<mem_count; m++ ) {
+      save_velocity[nlocal][d*mem_count+m] = buf[offset++];
     }
   }
   
   // pack normal random number
-  for ( m=0; m<mem_count; m++ ) {
-    save_random[nlocal][m] = buf[offset++];
+  for ( d=0; d<3; d++ ) { 
+    for ( m=0; m<2*mem_count; m++ ) {
+      save_random[nlocal][d*2*mem_count+m] = buf[offset++];
+    }
   }
   
   return offset;

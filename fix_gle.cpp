@@ -98,9 +98,10 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   
   save_velocity = NULL;
   save_random = NULL;
-  comm->maxexchange_fix += 6*mem_count;
+  comm->maxexchange_fix += 9*mem_count;
   grow_arrays(atom->nmax);
   atom->add_callback(0);
+  
   
   lastindex_v = lastindex_r  = 0;
   int nlocal= atom->nlocal, n, d,m;
@@ -109,8 +110,8 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
       for ( m=0; m<mem_count; m++ ) {
 	save_velocity[n][d*mem_count+m] = 0.0;
       }
-      for ( m=0; m<2*mem_count; m++ ) {
-	save_random[n][d*2*mem_count+m] = 0.0;
+      for ( m=0; m<2*mem_count-1; m++ ) {
+	save_random[n][d*(2*mem_count-1)+m] = 0.0;
       }
     }
 
@@ -243,7 +244,7 @@ void FixGLE::post_force(int vflag)
   for ( n=0; n<nlocal; n++ ) {
     for ( d=0; d<3; d++ ) {
       save_velocity[n][d*mem_count+lastindex_v] = v[n][d];
-      save_random[n][d*mem_count+lastindex_r] = random->gaussian();
+      save_random[n][d*(2*mem_count-1)+lastindex_r] = random->gaussian();
     }
   }
 
@@ -263,8 +264,8 @@ void FixGLE::post_force(int vflag)
       gamma2 = gfactor2[type[n]] * tsqrt;
 
       array[n][0] = fran[0] = gamma2*random_correlator->gaussian(&save_random[n][0],lastindex_r);
-      array[n][1] = fran[1] = gamma2*random_correlator->gaussian(&save_random[n][2*mem_count],lastindex_r);
-      array[n][2] = fran[2] = gamma2*random_correlator->gaussian(&save_random[n][4*mem_count],lastindex_r);
+      array[n][1] = fran[1] = gamma2*random_correlator->gaussian(&save_random[n][2*mem_count-1],lastindex_r);
+      array[n][2] = fran[2] = gamma2*random_correlator->gaussian(&save_random[n][4*mem_count-2],lastindex_r);
 
       double mem_sum;
       int j;
@@ -280,7 +281,7 @@ void FixGLE::post_force(int vflag)
 	  j--;
 	  if (j < 0) j = mem_count -1;
 	}
-	mem_sum += save_velocity[n][d*mem_count+j]*mem_kernel[mem_count-1]*0.5;
+	mem_sum += save_velocity[n][d*mem_count+j]*mem_kernel[mem_count-1];
 	array[n][d+3] = fdrag[d] = gamma1*mem_sum;
       }
 
@@ -295,7 +296,7 @@ void FixGLE::post_force(int vflag)
   lastindex_v++;
   if (lastindex_v==mem_count) lastindex_v=0;
   lastindex_r++;
-  if (lastindex_r==2*mem_count) lastindex_r=0;
+  if (lastindex_r==2*mem_count-1) lastindex_r=0;
 
 }
 
@@ -397,8 +398,9 @@ double FixGLE::memory_usage() {
 ------------------------------------------------------------------------- */
 
 void FixGLE::grow_arrays(int nmax) {
+  
   memory->grow(save_velocity,nmax,3*mem_count,"fix/gle:save_velocity");
-  memory->grow(save_random,nmax,6*mem_count,"fix/gle:save_random");
+  memory->grow(save_random,nmax,6*mem_count-3,"fix/gle:save_random");
 }
 
 /* ----------------------------------------------------------------------
@@ -427,8 +429,8 @@ int FixGLE::pack_exchange(int i, double *buf)
   
   // pack random number
   for ( d=0; d<3; d++ ) { 
-    for ( m=0; m<2*mem_count; m++ ) {
-      buf[offset++] = save_random[i][d*2*mem_count+m];
+    for ( m=0; m<2*mem_count-1; m++ ) {
+      buf[offset++] = save_random[i][d*(2*mem_count-1)+m];
     }
   }
   
@@ -452,8 +454,8 @@ int FixGLE::unpack_exchange(int nlocal, double *buf)
   
   // pack normal random number
   for ( d=0; d<3; d++ ) { 
-    for ( m=0; m<2*mem_count; m++ ) {
-      save_random[nlocal][d*2*mem_count+m] = buf[offset++];
+    for ( m=0; m<2*mem_count-1; m++ ) {
+      save_random[nlocal][d*(2*mem_count-1)+m] = buf[offset++];
     }
   }
   

@@ -25,6 +25,9 @@
 #include <cmath>
 #include <algorithm>
 #include <stdio.h>
+
+//#define SOLO_OPT
+
 using namespace std;
 
 // Float vector with standard operations
@@ -244,20 +247,38 @@ class NelderMeadOptimizer {
 	    printf("\n");
 	  }
 	}
-	float f(Vector v){
-	  float sum=0.0;
-	  int n,s;
-	  for(n=0;n<dimension;n++){
-	    float loc_sum = 0.0;
-	    for(s=0;s<dimension;s++){
-	      if(n+s>=dimension) continue;
-	      loc_sum += v[s]*v[s+n];
-	    }
-	  loc_sum -= target_function[n];
-	  sum += loc_sum*loc_sum;
-	  }
-	  return sum;
-	}
+float f(Vector v)
+{
+  float sum=0.0;
+  int n,s;
+  for(n=0;n<dimension;n++){
+    float loc_sum = 0.0;
+    #ifdef SOLO_OPT
+    for(s=0;s<dimension;s++){
+      if(n+s>=dimension) continue;
+#else
+      for(s=0;s<2*dimension-1;s++){
+      if(n+s>=2*dimension-1) continue;
+#endif
+      int sp = s-dimension+1;
+      int snp = s+n-dimension+1;
+      float left,right;
+#ifdef SOLO_OPT
+      left = v[s];
+      right = v[s+n];
+#else
+      if (sp > 0) left = v[2*dimension-2-s];
+      else left = v[s];
+      if (snp > 0) right = v[2*dimension-2-s-n];
+      else right = v[s+n];
+#endif
+      loc_sum += left*right;
+    }
+    loc_sum -= target_function[n];
+    sum += loc_sum*loc_sum;
+  }
+  return sum;
+}
 	void find_vectors(){
 	  extr_values[0] = 999999.0;
 	  extr_values[1] = 0.0;
@@ -352,12 +373,13 @@ class NelderMeadOptimizer {
                     }
 
                     // algorithm is terminating, output: simplex' center of gravity
+                    find_vectors();
                     Vector cog;
 		    cog.prepare(dimension);
                     for (int i = 0; i<=dimension; i++) {
                         cog += vectors[i];
                     }
-                    return cog/(dimension+1);
+                    return vectors[extr_ind[0]];
                 } else {
                     // as long as we don't have enough vectors, request random ones,
                     // with coordinates between 0 and 1. If you want other start vectors,

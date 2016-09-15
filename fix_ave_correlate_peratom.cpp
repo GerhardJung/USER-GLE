@@ -1237,7 +1237,9 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
             if(i==0&&j==0) local_count[offset+corr_length/2]+=1.0;
             local_corr[offset+corr_length/2][ipair] += array[inda][i * nsave + m]*array[indb][j * nsave + n];
           } else {
-            if(i==0&&j==0) local_count[offset]+=1.0;
+            if(i==0&&j==0) {
+	      local_count[offset]+=1.0;
+	    }
             local_corr[offset][ipair]+=array[inda][i * nsave + m]*array[indb][j * nsave + n];
           }
         }
@@ -1272,7 +1274,9 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
           if(i==0&&j==0) local_count[k+corr_length/2]+=1.0;
           local_corr[k+corr_length/2][ipair] += array[inda][i * nsave + m]*array[indb][j * nsave + n];
         } else {
-          if(i==0&&j==0) local_count[k]+=1.0;
+          if(i==0&&j==0) {
+	    local_count[k]+=1.0;
+	  }
           local_corr[k][ipair]+= array[inda][i * nsave + m]*array[indb][j * nsave + n];
         }
           }
@@ -1342,7 +1346,6 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
       ipair++;
     }
   }
-
 
 }
 

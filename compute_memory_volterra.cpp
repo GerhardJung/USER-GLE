@@ -36,7 +36,7 @@
 
 using namespace LAMMPS_NS;
 
-enum{PERATOM,GLOBAL};
+enum{PERATOM,PERGROUP, GROUP};
 
 /* ---------------------------------------------------------------------- */
 
@@ -71,7 +71,8 @@ ComputeMemoryVolterra::ComputeMemoryVolterra(LAMMPS * lmp, int narg, char **arg)
     if (strcmp(arg[iarg],"switch") == 0) {
       if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       if (strcmp(arg[iarg+1],"peratom") == 0) memory_switch = PERATOM;
-      else if (strcmp(arg[iarg+1],"global") == 0) memory_switch = GLOBAL;
+      else if (strcmp(arg[iarg+1],"pergroup") == 0) memory_switch = PERGROUP;
+      else if (strcmp(arg[iarg+1],"group") == 0) memory_switch = GROUP;
       else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       iarg += 2;
     } else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
@@ -106,24 +107,49 @@ ComputeMemoryVolterra::ComputeMemoryVolterra(LAMMPS * lmp, int narg, char **arg)
   sprintf(c_nrepeat, "%d", nrepeat);
   sprintf(c_nfreq, "%d", nfreq);
   
-  int narg_corr = 17;
-  if(memory_switch==GLOBAL) narg_corr += 2;
-  char **newarg_f = new char*[narg_corr];
-  newarg_f[0] = id_fix;
-  newarg_f[1] = group->names[igroup];
-  newarg_f[2] = (char *) "ave/correlate/peratom";
-  newarg_f[3] = c_nevery;
-  newarg_f[4] = c_nrepeat;
-  newarg_f[5] = c_nfreq;
-  newarg_f[6] = (char *) "v_vx"; newarg_f[7] = (char *) "v_vy"; newarg_f[8] = (char *) "v_vz"; 
-  newarg_f[9] = (char *) "v_fx"; newarg_f[10] = (char *) "v_fy"; newarg_f[11] = (char *) "v_fz";
-  newarg_f[12] = (char *) "type"; newarg_f[13] = (char *) "auto/upper";
-  newarg_f[14] = (char *) "ave"; newarg_f[15] = (char *) "running";
-  newarg_f[16] = (char *) "restart";
-  if(memory_switch==GLOBAL) newarg_f[17] = (char *) "switch"; newarg_f[18] = (char *) "global";
-  modify->add_fix(narg_corr,newarg_f);
-  fix = (FixAveCorrelatePeratom *) modify->fix[modify->nfix-1];
-  delete [] newarg_f;
+  if (memory_switch != GROUP) {
+    int narg_corr = 17;
+    if(memory_switch==PERGROUP) narg_corr += 2;
+    char **newarg_f = new char*[narg_corr];
+    newarg_f[0] = id_fix;
+    newarg_f[1] = group->names[igroup];
+    newarg_f[2] = (char *) "ave/correlate/peratom";
+    newarg_f[3] = c_nevery;
+    newarg_f[4] = c_nrepeat;
+    newarg_f[5] = c_nfreq;
+    newarg_f[6] = (char *) "v_vx"; newarg_f[7] = (char *) "v_vy"; newarg_f[8] = (char *) "v_vz"; 
+    newarg_f[9] = (char *) "v_fx"; newarg_f[10] = (char *) "v_fy"; newarg_f[11] = (char *) "v_fz";
+    newarg_f[12] = (char *) "type"; newarg_f[13] = (char *) "auto/upper";
+    newarg_f[14] = (char *) "ave"; newarg_f[15] = (char *) "running";
+    newarg_f[16] = (char *) "restart";
+    if(memory_switch==PERGROUP) newarg_f[17] = (char *) "switch"; newarg_f[18] = (char *) "pergroup";
+    modify->add_fix(narg_corr,newarg_f);
+    fix = (FixAveCorrelatePeratom *) modify->fix[modify->nfix-1];
+    delete [] newarg_f;
+  } else {
+    int narg_corr = 22;
+    char **newarg_f = new char*[narg_corr];
+    char c_1[15];
+    sprintf(c_1, "%d", 1);
+    char c_6[15];
+    sprintf(c_6, "%d", 6);
+    newarg_f[0] = id_fix;
+    newarg_f[1] = group->names[igroup];
+    newarg_f[2] = (char *) "ave/correlate/peratom";
+    newarg_f[3] = c_nevery;
+    newarg_f[4] = c_nrepeat;
+    newarg_f[5] = c_nfreq;
+    newarg_f[6] = (char *) "type"; newarg_f[7] = (char *) "auto/upper";
+    newarg_f[8] = (char *) "ave"; newarg_f[9] = (char *) "running";
+    newarg_f[10] = (char *) "restart";
+    newarg_f[11] = (char *) "switch"; newarg_f[12] = (char *) "group";
+    newarg_f[13] = c_1; newarg_f[14] = (char *) "colloid";
+    newarg_f[15] = c_6; newarg_f[16] = (char *) "vx"; newarg_f[17] = (char *) "vy"; newarg_f[18] = (char *) "vz"; 
+    newarg_f[19] = (char *) "fx"; newarg_f[20] = (char *) "fy"; newarg_f[21] = (char *) "fz";
+    modify->add_fix(narg_corr,newarg_f);
+    fix = (FixAveCorrelatePeratom *) modify->fix[modify->nfix-1];
+    delete [] newarg_f;
+  }
   
   //determine amss of the particles
   int nlocal= atom->nlocal;
@@ -132,9 +158,12 @@ ComputeMemoryVolterra::ComputeMemoryVolterra(LAMMPS * lmp, int narg, char **arg)
   double *a_mass = atom->mass;
   int a;
   double mass_loc = 0;
+  
+  
   for (a= 0; a < nlocal; a++) {
     if(mask[a] & groupbit) {
-      mass_loc=a_mass[type[a]];
+      if (memory_switch != GROUP) mass_loc=a_mass[type[a]];
+      else mass_loc+=a_mass[type[a]];
     }
   }
   MPI_Reduce(&mass_loc, &mass, 1, MPI_DOUBLE, MPI_MAX, 0, world);

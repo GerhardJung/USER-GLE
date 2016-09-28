@@ -59,6 +59,8 @@ class FixAveCorrelatePeratom : public Fix {
   int include_orthogonal;
   double prefactor;
   
+  int *cor_groupbit, *cor_valbit;
+  
   double **alpha;		//for orthogonal dynamics
   double **epsilon;
   double **kappa;

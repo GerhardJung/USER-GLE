@@ -100,7 +100,7 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   save_random = NULL;
   comm->maxexchange_fix += 9*mem_count;
   grow_arrays(atom->nmax);
-  atom->add_callback(0);
+  //atom->add_callback(0);
   
   
   lastindex_v = lastindex_r  = 0;
@@ -192,11 +192,11 @@ void FixGLE::read_mem_file()
   //read memory
   int i;
   double t,t_old, mem;
-  t = t_old = mem = 0;
+  t = t_old = mem = 0.0;
   for(i=0; i<mem_count; i++){
     t_old = t;
     fscanf(mem_file,"%lf %lf\n",&t,&mem);
-    if (t - t_old - update->dt > 10E-10) error->all(FLERR,"memory needs resolution similar to timestep");
+    if (abs(t - t_old - update->dt) > 10E-10 && t_old != 0.0) error->all(FLERR,"memory needs resolution similar to timestep");
     mem_kernel[i] = mem;
   }
   
@@ -285,9 +285,9 @@ void FixGLE::post_force(int vflag)
 	array[n][d+3] = fdrag[d] = gamma1*mem_sum;
       }
 
-      f[n][0] += fdrag[0] + fran[0];
-      f[n][1] += fdrag[1] + fran[1];
-      f[n][2] += fdrag[2] + fran[2];
+      //f[n][0] += fdrag[0] + fran[0];
+      //f[n][1] += fdrag[1] + fran[1];
+      //f[n][2] += fdrag[2] + fran[2];
 
     }
     

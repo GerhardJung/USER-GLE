@@ -53,10 +53,10 @@ void RanCor::init()
   /*for (i=0; i<mem_count; i++) {
     mem_kernel[i] = 100*exp(-10.68*i*0.005)*cos(12.83*i*0.005);
   }*/
-  double norm = mem_kernel[0];
+  /*double norm = mem_kernel[0];
  for (i=0; i<mem_count; i++) {
     mem_kernel[i] /= norm / 100.0;
-  }
+  }*/
 #ifdef SOLO_OPT
   double norm = mem_kernel[0];
   for (int i=0; i<mem_count; i++) {
@@ -115,7 +115,6 @@ for (i=0; i<mem_count; i++) {
 /* ----------------------------------------------------------------------
    gaussian RN
 ------------------------------------------------------------------------- */
-
 double RanCor::gaussian(double* normal, int lastindex)
 {
   // calculate corr. random number
@@ -125,16 +124,14 @@ double RanCor::gaussian(double* normal, int lastindex)
   for (i=0; i<2*mem_count-1; i++) {
     ran += normal[j]*a_coeff[i];
     j--;
-    if (j == -1) j = 2*mem_count-3;
+    if (j == -1) j = 2*mem_count-1;
   }
-
   return ran;
 }
 
 /* ---------------------------------------------------------------------- 
   initializes the alpha coefficients by fourier transformation
   ----------------------------------------------------------------------  */
-
 void RanCor::init_acoeff() {
   
   int N = 2*mem_count-1;
@@ -153,9 +150,9 @@ void RanCor::init_acoeff() {
   
   inverseDFT(FT_a_coeff,N, a_coeff);
   
-  for(int s=0;s<N;s++){
+  /*for(int s=0;s<N;s++){
     printf("%d %f\n",s,a_coeff[s]);
-  }
+  }*/
   
   int n,s;
   for(n=0;n<mem_count;n++){
@@ -168,7 +165,6 @@ void RanCor::init_acoeff() {
   }
   
   //error->all(FLERR,"break");
-
 }
 
 /* ---------------------------------------------------------------------- 
@@ -203,12 +199,9 @@ void RanCor::init_opt(NelderMeadOptimizer &opt, Vector v, int dimension) {
  
 }
  
-
-
 /* ---------------------------------------------------------------------- 
   function for the minimization process to determine correlation coefficients
   ----------------------------------------------------------------------  */
-
 float RanCor::min_function(Vector v, int dimension)
 {
   float sum=0.0;
@@ -234,7 +227,7 @@ float RanCor::min_function(Vector v, int dimension)
 }
 
 /* ---------------------------------------------------------------------- 
-  performs a forward DFT
+  performs a forward DFT of reell (and symmetric) input
   ----------------------------------------------------------------------  */
 void RanCor::forwardDFT(double *data, int N, complex<double> *result) { 
   for (int k = -mem_count+1; k < mem_count; k++) { 
@@ -250,8 +243,10 @@ void RanCor::forwardDFT(double *data, int N, complex<double> *result) {
   } 
 }
 
+/* ---------------------------------------------------------------------- 
+  performs a backward DFT with complex input (and reell output)
+  ----------------------------------------------------------------------  */
 void RanCor::inverseDFT(complex<double> *data, int N, double *result) { 
-  // note: this code is not optimised at all, written for clarity not speed. 
   for (int n = -mem_count+1; n < mem_count; n++) { 
     result[n+mem_count-1] = 0.0; 
     for (int k = -mem_count+1; k < mem_count; k++) { 

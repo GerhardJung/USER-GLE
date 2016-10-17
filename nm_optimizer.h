@@ -220,7 +220,7 @@ class NelderMeadOptimizer {
 	  for(n=0;n<mem_count;n++){
 	    double loc_sum = 0.0;
 	    for(s=0;s<dim_cos;s+=3){
-	      loc_sum += v[s]*exp(v[s+1]*n)*cos(v[s+2]*n);
+	      loc_sum += v[s]*exp(-v[s+1]*v[s+1]*n)*cos(v[s+2]*n);
 	    }
 	    for(s=dim_cos;s<dimension;s+=4){
 	      if (n>=v[s+3])

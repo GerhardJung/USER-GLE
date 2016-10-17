@@ -543,6 +543,20 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
       comm->maxexchange_fix = MAX(comm->maxexchange_fix,(nvalues+include_orthogonal+variable_nvalues)*nsave);
       grow_arrays(atom->nmax);
       atom->add_callback(0);
+      double *group_mass_loc;
+      	int *type = atom->type;
+	double *mass = atom->mass;
+      memory->create(group_mass,ngroup_glo,"ave/correlate/peratom:group_mass");
+      memory->create(group_mass_loc,ngroup_glo,"ave/correlate/peratom:group_mass_loc");
+      for (a= 0; a < ngroup_glo; a++) {
+	group_mass_loc[a]=group_mass[a]=0;
+      }
+      for (a= 0; a < ngroup_loc; a++) {
+	group_mass_loc[a+ngroup_scan]=mass[type[indices_group[a]]];
+      }
+      MPI_Allreduce(group_mass_loc, group_mass, ngroup_glo, MPI_DOUBLE, MPI_SUM, world);
+	memory->destroy(group_mass_loc);
+      
     } else {
       // create global memorys
       grow_arrays(ngroup_glo);
@@ -1277,9 +1291,9 @@ void FixAveCorrelatePeratom::end_of_step()
     if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED) {
       int loc_bin = i%bins;
       int loc_ind = (i - loc_bin)/bins;
-      fprintf(fp,"%d %d %f %f",loc_ind+1,loc_ind*nevery,range/bins*loc_bin,save_count[i]);
+      fprintf(fp,"%d %d %lf %lf",loc_ind+1,loc_ind*nevery,range/bins*loc_bin,save_count[i]);
     } else {
-      fprintf(fp,"%d %d %f",i+1,i*nevery,save_count[i]);
+      fprintf(fp,"%d %d %lf",i+1,i*nevery,save_count[i]);
     }
     if (save_count[i]) {
       for (j = 0; j < npair; j++)
@@ -1291,7 +1305,7 @@ void FixAveCorrelatePeratom::end_of_step()
     if (type == AUTOCROSS || variable_flag == DIST_DEPENDENED) {
       int offset = i + corr_length/2;
       if (type == AUTOCROSS)
-        fprintf(fp," %f",save_count[offset]);
+        fprintf(fp," %lf",save_count[offset]);
       if (save_count[offset]) {
         for (j = 0; j < npair; j++)
           fprintf(fp," %g",prefactor*save_corr[offset][j]/save_count[offset]);
@@ -1796,6 +1810,7 @@ double FixAveCorrelatePeratom::memory_usage() {
 
   if(memory_switch==PERATOM) atoms = atom->nmax;
   else atoms = ngroup_glo;
+  printf("ngroup = %d, atom =%d\n", ngroup_glo,atom->nmax);
   bytes = atoms * (nvalues + include_orthogonal+variable_nvalues) * nsave * sizeof(double);
   return bytes;
 }

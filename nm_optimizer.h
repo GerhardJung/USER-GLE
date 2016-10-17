@@ -25,8 +25,9 @@
 #include <cmath>
 #include <algorithm>
 #include <stdio.h>
+#include "update.h"
 
-//#define SOLO_OPT
+#define PRONY
 
 using namespace std;
 
@@ -35,16 +36,16 @@ class Vector {
 public:
     Vector () {
     }
-    Vector(float* values, int dim) {
+    Vector(double* values, int dim) {
       for (int i=0; i<dim; i++) {
 	coords.push_back(values[i]);
       }
     }
 
-    float& operator[](int i) {
+    double& operator[](int i) {
         return coords[i];
     }
-    float at(int i) const {
+    double at(int i) const {
         return coords[i];
     }
     int dimension() const {
@@ -87,7 +88,7 @@ public:
         }
         return true;
     }
-    Vector operator*(float factor) {
+    Vector operator*(double factor) {
         Vector result;
         result.prepare(dimension());
         for (int i=0; i<dimension(); i++) {
@@ -95,7 +96,7 @@ public:
         }
         return result;
     }
-    Vector operator/(float factor) {
+    Vector operator/(double factor) {
         Vector result;
         result.prepare(dimension());
         for (int i=0; i<dimension(); i++) {
@@ -103,7 +104,7 @@ public:
         }
         return result;
     }
-    void operator/=(float factor) {
+    void operator/=(double factor) {
         for (int i=0; i<dimension(); i++) {
             coords[i] /= factor;
         }
@@ -117,71 +118,22 @@ public:
         }
         return false;
     }
-    float length() {
-        float sum = 0;
+    double length() {
+        double sum = 0;
         for (int i=0; i<dimension(); i++) {
             sum += coords[i]*coords[i];
         }
         return pow(sum, 0.5f);
     }
 private:
-    vector<float> coords;
-};
-
-// Database class to store Vactors and their Values
-class ValueDB {
-    public:
-        ValueDB() {
-	  
-        }
-        void init(int dimension, double *target_function) {
-	  this->dimension = dimension;
-          this->target_function = target_function;
-        }
-        float lookup(Vector vec) {
-            if (!contains(vec)) {
-		float score = calc_score(vec);
-		insert(vec, score);
-		return score;
-            } else {
-                return values[vec];
-            }
-        }
-        void insert(Vector vec, float value) {
-            values[vec] = value;
-        }
-        
-        void reset() {
-	  values.clear();
-	}
-	float calc_score(Vector v){
-	  float sum=0.0;
-	  int n,s;
-	  for(n=0;n<dimension;n++){
-	    float loc_sum = 0.0;
-	    for(s=0;s<dimension;s++){
-	      if(n+s>=dimension) continue;
-	      loc_sum += v[s]*v[s+n];
-	    }
-	  loc_sum -= target_function[n];
-	  sum += loc_sum*loc_sum;
-	  }
-	  return sum;
-	}
-    private:
-        bool contains(Vector vec) {
-            map<Vector, float>::iterator it = values.find(vec); 
-            return it != values.end();
-        }
-        map<Vector, float> values;
-	int dimension;
-	double *target_function;
+    vector<double> coords;
 };
 
 class NelderMeadOptimizer {
     public:
-        NelderMeadOptimizer(int dimension, float termination_distance, double *target_function) {
-            this->dimension = dimension;
+        NelderMeadOptimizer(int dim_cos, int dim_tot, double termination_distance, double *target_function, int mem_count) {
+            this->dimension = dim_tot;
+	    this->dim_cos = dim_cos;
             srand(time(NULL));
             alpha = 1;
             gamma = 2;
@@ -189,9 +141,10 @@ class NelderMeadOptimizer {
             sigma = 0.5;
             this->termination_distance = termination_distance;
 	    this->target_function = target_function;
+	    this->mem_count = mem_count;
 	    //for (int i=0; i<dimension;i++) printf("target: %f\n",target_function[i]);
 	    extr_ind = new int[3];
-	    extr_values = new float[3];
+	    extr_values = new double[3];
         }
         ~NelderMeadOptimizer() {
 	  delete [] extr_ind;
@@ -207,7 +160,7 @@ class NelderMeadOptimizer {
             if (vectors.size() < dimension + 1) {
                 return false;
             }
-            float mean = 0.0;
+            double mean = 0.0;
 	    for (int i=0; i<dimension+1; i++) {
 	      mean += f(vectors[i]);
 	    }
@@ -223,14 +176,14 @@ class NelderMeadOptimizer {
 	    if (var < termination_distance) return true;
 	    else return false;
         }
-        void insert(Vector vec, float score) {
+        void insert(Vector vec, double score) {
             if (vectors.size() < dimension+1) {
                 vectors.push_back(vec);
             }
         }
         void print_comp(Vector best) {
 	    for(int n=0;n<dimension;n++){
-	    float loc_sum = 0.0;
+	    double loc_sum = 0.0;
 	      for(int s=0;s<dimension;s++){
 		if(n+s>=dimension) continue;
 		loc_sum += best[s]*best[s+n];
@@ -247,45 +200,44 @@ class NelderMeadOptimizer {
 	    printf("\n");
 	  }
 	}
-float f(Vector v)
-{
-  float sum=0.0;
-  int n,s;
-  for(n=0;n<dimension;n++){
-    float loc_sum = 0.0;
-    #ifdef SOLO_OPT
-    for(s=0;s<dimension;s++){
-      if(n+s>=dimension) continue;
-#else
-      for(s=0;s<2*dimension-1;s++){
-      if(n+s>=2*dimension-1) continue;
-#endif
-      int sp = s-dimension+1;
-      int snp = s+n-dimension+1;
-      float left,right;
-#ifdef SOLO_OPT
-      left = v[s];
-      right = v[s+n];
-#else
-      if (sp > 0) left = v[2*dimension-2-s];
-      else left = v[s];
-      if (snp > 0) right = v[2*dimension-2-s-n];
-      else right = v[s+n];
-#endif
-      loc_sum += left*right;
-    }
-    loc_sum -= target_function[n];
-    sum += loc_sum*loc_sum;
-  }
-  return sum;
-}
+	double f(Vector v) {
+	  int n,s;
+	  double sum = 0.0;
+	  for(n=0;n<(dimension+1)/2;n++){
+	    double loc_sum = 0.0;
+	    for(s=0;s<dimension;s++){
+	      if (n-s>0) continue;
+	      loc_sum += v[s]*v[n-s+dimension-1];
+	    }
+	    loc_sum -= target_function[n];   
+	    sum += loc_sum*loc_sum;
+	  }
+	  return sum;
+	}
+	double p(Vector v) {
+	  int n,s;
+	  double sum = 0.0;
+	  for(n=0;n<mem_count;n++){
+	    double loc_sum = 0.0;
+	    for(s=0;s<dim_cos;s+=3){
+	      loc_sum += v[s]*exp(v[s+1]*n)*cos(v[s+2]*n);
+	    }
+	    for(s=dim_cos;s<dimension;s+=4){
+	      if (n>=v[s+3])
+	      loc_sum += v[s]*exp(v[s+1]*n)*sin(v[s+2]*n);
+	    }
+	    loc_sum -= target_function[n];   
+	    sum += loc_sum*loc_sum;
+	  }
+	  return sum;
+	}
 	void find_vectors(){
 	  extr_values[0] = 999999.0;
 	  extr_values[1] = 0.0;
 	  extr_values[2] = 0.0;
 	  
 	  for (int i = 0; i<dimension+1; i++) {
-	    float val = f(vectors[i]);
+	    double val = p(vectors[i]);
 	    if (val < extr_values[0]) {
 	      extr_values[0] = val;
 	      extr_ind[0] = i;
@@ -302,7 +254,7 @@ float f(Vector v)
 	    }
 	  }  
 	}
-        Vector step(Vector vec, float score) {
+        Vector step(Vector vec, double score) {
             try {
                 if (vectors.size() < dimension+1) {
                     vectors.push_back(vec);
@@ -323,20 +275,20 @@ float f(Vector v)
                         }
                         cog /= dimension;
                         Vector best = vectors[extr_ind[0]];
-			float vbest = extr_values[0];
+			double vbest = extr_values[0];
                         Vector worst = vectors[extr_ind[2]];
-			float vworst = extr_values[2];
+			double vworst = extr_values[2];
                         Vector second_worst = vectors[extr_ind[1]];
-			float vsworst = extr_values[1];
+			double vsworst = extr_values[1];
 			//printf("best=%d/%f, sworst=%d/%f, worst=%d/%f\n",extr_ind[0],vbest,extr_ind[1],vsworst,extr_ind[2],vworst);
                         // reflect
                         Vector reflected = cog + (cog - worst)*alpha;
-			float vreflected = f(reflected);
+			double vreflected = p(reflected);
 			if (vreflected < vbest) {
 			  //print_comp(reflected);
 			    //expand
                             Vector expanded = cog + (cog - worst)*gamma;
-			    float vexpanded = f(expanded);
+			    double vexpanded = p(expanded);
                             if (vexpanded < vreflected) {
 			      //printf("expanded\n");
                                 vectors[extr_ind[2]] = expanded;
@@ -356,7 +308,7 @@ float f(Vector v)
 			    Vector h;
 			    h.prepare(dimension);
 			    Vector contracted = cog + (worst - cog)*beta;
-                            if (f(contracted) > vworst) {
+                            if (p(contracted) > vworst) {
 			      	//printf("rescaled\n");
                                 for (int i=0; i<dimension+1; i++) {
                                     vectors[i] = (vectors[i]+best)/2.0;
@@ -368,17 +320,13 @@ float f(Vector v)
                             }
                         }
                         if (counter%100==0)
-			  printf("count %d: best value: %f\n",counter,f(best));
+			  printf("count %d: best value: %f\n",counter,p(best));
 			counter++;
+			
                     }
 
-                    // algorithm is terminating, output: simplex' center of gravity
+                    // algorithm is terminating, output: bst vector
                     find_vectors();
-                    Vector cog;
-		    cog.prepare(dimension);
-                    for (int i = 0; i<=dimension; i++) {
-                        cog += vectors[i];
-                    }
                     return vectors[extr_ind[0]];
                 } else {
                     // as long as we don't have enough vectors, request random ones,
@@ -400,11 +348,13 @@ float f(Vector v)
 	  
 	}
     private:
+	int dim_cos;
         int dimension;
-        float alpha, gamma, beta, sigma;
-        float termination_distance;
+	int mem_count;
+        double alpha, gamma, beta, sigma;
+        double termination_distance;
         vector<Vector> vectors;
 	int *extr_ind;
-	float *extr_values;
+	double *extr_values;
 	double *target_function;
 };

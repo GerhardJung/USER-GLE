@@ -91,7 +91,7 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   
   // initialize correlated RNG with processor-unique seed
   random = new RanMars(lmp,seed + comm->me);
-  precision = 0.000001;
+  precision = 0.000002;
   random_correlator = new RanCor(lmp,mem_count, mem_kernel, precision);
   
   // allocate and init per-atom arrays (velocity and normal random number)
@@ -111,7 +111,7 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
 	save_velocity[n][d*mem_count+m] = 0.0;
       }
       for ( m=0; m<2*mem_count-1; m++ ) {
-	save_random[n][d*(2*mem_count-1)+m] = 0.0;
+	save_random[n][d*(2*mem_count-1)+m] = random->gaussian();
       }
     }
 
@@ -276,7 +276,6 @@ void FixGLE::post_force(int vflag)
 	if (j < 0) j = mem_count -1;
 	
 	for ( m=1; m<mem_count-1; m++ ) {
-	  //if (m<50 && n==0 && d==0) printf("%d: %f * %f\n",m,save_velocity[n][d*mem_count+j],mem_kernel[m]);
 	  mem_sum += save_velocity[n][d*mem_count+j]*mem_kernel[m];
 	  j--;
 	  if (j < 0) j = mem_count -1;
@@ -285,9 +284,9 @@ void FixGLE::post_force(int vflag)
 	array[n][d+3] = fdrag[d] = gamma1*mem_sum;
       }
 
-      //f[n][0] += fdrag[0] + fran[0];
-      //f[n][1] += fdrag[1] + fran[1];
-      //f[n][2] += fdrag[2] + fran[2];
+      f[n][0] += fdrag[0] + fran[0];
+      f[n][1] += fdrag[1] + fran[1];
+      f[n][2] += fdrag[2] + fran[2];
 
     }
     

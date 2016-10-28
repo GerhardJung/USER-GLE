@@ -449,12 +449,15 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   memory->create(local_count,corr_length,"ave/correlate/peratom:local_count");
   memory->create(global_count,corr_length,"ave/correlate/peratom:local_count");
   memory->create(save_count,corr_length,"ave/correlate/peratom:save_count");
-  memory->create(local_corr,corr_length,npair,"ave/correlate/peratom:corr");
-  memory->create(global_corr,corr_length,npair,"ave/correlate/peratom:corr");
+  memory->create(local_corr,corr_length,npair,"ave/correlate/peratom:local_corr");
+  memory->create(global_corr,corr_length,npair,"ave/correlate/peratom:global_corr");
   memory->create(save_corr,corr_length,npair,"ave/correlate/peratom:save_corr");
+  memory->create(local_corr_err,corr_length,npair,"ave/correlate/peratom:local_corr_err");
+  memory->create(global_corr_err,corr_length,npair,"ave/correlate/peratom:global_corr_err");
+  memory->create(save_corr_err,corr_length,npair,"ave/correlate/peratom:save_corr_err");
   for (i = 0; i < corr_length; i++) {
     save_count[i] = local_count[i] =  global_count[i] = 0.0;
-    for (j = 0; j < npair; j++) save_corr[i][j] = local_corr[i][j] = global_corr[i][j] = 0.0;
+    for (j = 0; j < npair; j++) save_corr[i][j] = local_corr[i][j] = global_corr[i][j] = save_corr_err[i][j] = local_corr_err[i][j] = global_corr_err[i][j] = 0.0;
   }
 
   if (mean_flag) {
@@ -673,6 +676,9 @@ FixAveCorrelatePeratom::~FixAveCorrelatePeratom()
   memory->destroy(local_corr);
   memory->destroy(global_corr);
   memory->destroy(save_corr);
+  memory->destroy(local_corr_err);
+  memory->destroy(global_corr_err);
+  memory->destroy(save_corr_err);
   if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED) memory->destroy(variable_store);
 
   if (dynamics == ORTHOGONAL || dynamics == ORTHOGONALSECOND) {
@@ -1272,13 +1278,16 @@ void FixAveCorrelatePeratom::end_of_step()
   //reduce the results from every proc
   MPI_Reduce(local_count, global_count, corr_length, MPI_DOUBLE, MPI_SUM, 0, world);
   MPI_Reduce(&local_corr[0][0], &global_corr[0][0], npair*corr_length, MPI_DOUBLE, MPI_SUM, 0, world);
+  MPI_Reduce(&local_corr_err[0][0], &global_corr_err[0][0], npair*corr_length, MPI_DOUBLE, MPI_SUM, 0, world);
   //reset local arrays
   for (i = 0; i < corr_length; i++) {
     save_count[i] += global_count[i];
     local_count[i] =  global_count[i] = 0.0;
     for (j = 0; j < npair; j++){
       save_corr[i][j] += global_corr[i][j];
+      save_corr_err[i][j] += global_corr_err[i][j];
       local_corr[i][j] = global_corr[i][j] = 0.0;
+      local_corr_err[i][j] = global_corr_err[i][j] = 0.0;
     }
   }
 
@@ -1297,10 +1306,10 @@ void FixAveCorrelatePeratom::end_of_step()
     }
     if (save_count[i]) {
       for (j = 0; j < npair; j++)
-        fprintf(fp," %g",prefactor*save_corr[i][j]/save_count[i]);
+        fprintf(fp," %g %g",prefactor*save_corr[i][j]/save_count[i],prefactor*save_corr_err[i][j]/save_count[i]);
     } else {
       for (j = 0; j < npair; j++)
-        fprintf(fp," 0.0");
+        fprintf(fp," 0.0 0.0");
     }
     if (type == AUTOCROSS || variable_flag == DIST_DEPENDENED) {
       int offset = i + corr_length/2;
@@ -1308,7 +1317,7 @@ void FixAveCorrelatePeratom::end_of_step()
         fprintf(fp," %lf",save_count[offset]);
       if (save_count[offset]) {
         for (j = 0; j < npair; j++)
-          fprintf(fp," %g",prefactor*save_corr[offset][j]/save_count[offset]);
+          fprintf(fp," %g %g",prefactor*save_corr[offset][j]/save_count[offset],prefactor*save_corr_err[offset][j]/save_count[offset]);
       } else {
         for (j = 0; j < npair; j++)
           fprintf(fp," 0.0");
@@ -1318,8 +1327,8 @@ void FixAveCorrelatePeratom::end_of_step()
       }
       fflush(fp);
       if (overwrite) {
-    long fileend = ftell(fp);
-    ftruncate(fileno(fp),fileend);
+	long fileend = ftell(fp);
+	ftruncate(fileno(fp),fileend);
       }
     }
 
@@ -1446,154 +1455,179 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
     double nvalues_lower = i;
     if (type == FULL) nvalues_lower = 0;
     for (j = nvalues_lower; j < nvalues_upper; j+=incr_nvalues) {
-
       for (a= 0; a < ngroup_glo; a++) {
-    //determine whether just autocorrelation or also cross correlation (different atoms)
-    double ngroup_lower = a;
-    double ngroup_upper = a+1;
-    if (type == CROSS || type == AUTOCROSS){
-      ngroup_lower = a;
-      ngroup_upper = ngroup_glo;
-    }
-    for (b = ngroup_lower; b < ngroup_upper; b++) {
-      if (type == CROSS && a==b) continue;
+	//determine whether just autocorrelation or also cross correlation (different atoms)
+	double ngroup_lower = a;
+	double ngroup_upper = a+1;
+	if (type == CROSS || type == AUTOCROSS){
+	  ngroup_lower = a;
+	  ngroup_upper = ngroup_glo;
+	}
+	for (b = ngroup_lower; b < ngroup_upper; b++) {
+	  if (type == CROSS && a==b) continue;
 
-      //initialize counter for work distribution
-      if(dynamics==NORMAL) m = lastindex - sample_start;
-      else m = lastindex - (nsave - 1 - sample_start);
-      if (m < 0) m = nsave+m;
-      //printf("%d\n",m);
-      int inda,indb;
-      if(memory_switch==PERATOM){
-        inda=indices_group[a];
-        indb=indices_group[b];
-      } else {
-        inda = a;
-        indb = b;
-      }
-      if(dynamics==NORMAL){
-        for (k = sample_start; k < sample_stop; k++) {
-          if (variable_flag == VAR_DEPENDENED){
-        double dV = variable_store[inda][m] - variable_store[indb][n];
-        dV=fabs(dV);
-        if(dV<range){
-          int ind = dV/range*bins;
-          int offset= k*bins+ind;
-          //count once
-          if (type == AUTOCROSS && b!=a) {
-            if(i==0&&j==0) local_count[offset+corr_length/2]+=1.0;
-            local_corr[offset+corr_length/2][ipair] += array[inda][i * nsave + m]*array[indb][j * nsave + n];
-          } else {
-            if(i==0&&j==0) {
-	      local_count[offset]+=1.0;
-	    }
-            local_corr[offset][ipair]+=array[inda][i * nsave + m]*array[indb][j * nsave + n];
-          }
-        }
-          } else if (variable_flag == DIST_DEPENDENED) {
-        double *dr = new double[3];
-        dr[0] = variable_store[inda][m] - variable_store[indb][n];
-        dr[1] = variable_store[inda][m+nsave] - variable_store[indb][n+nsave];
-        dr[2] = variable_store[inda][m+2*nsave] - variable_store[indb][n+2*nsave];
-	domain->minimum_image(dr[0],dr[1],dr[2]);
-        double dV = sqrt( dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2]);
-        if(dV<range){
-          double *res_data = new double[8];
-          double *inp_data = new double[6];
-          int p;
-          for (p=0; p<3; p++) inp_data[p] = array[inda][ (i+p) * nsave + m];
-          for (p=0; p<3; p++) inp_data[p+3] = array[indb][ (j+p) * nsave + n];
-          decompose(res_data,dr,inp_data);
-          //for (int z=0; z<8; z++) printf("res_data[%d]=%f\n",z,res_data[z]);
-          // calculate correlation
-          int ind = dV/range*bins;
-          int offset= k*bins+ind;
-          if(i==0&&j==0) local_count[offset]+=1.0;
-          local_corr[offset][ipair] += res_data[0]*res_data[1];
-          if(i==0&&j==0) local_count[offset+corr_length/2]+=1.0;
-          local_corr[offset+corr_length/2][ipair] += res_data[2]*res_data[5]+res_data[3]*res_data[6]+res_data[4]*res_data[7];
-          delete[] res_data;
-          delete[] inp_data;
-        }
-        delete[] dr;
-          } else { //no variable dependency
-        if (type == AUTOCROSS && b!=a) {
-          if(i==0&&j==0) local_count[k+corr_length/2]+=1.0;
-          local_corr[k+corr_length/2][ipair] += array[inda][i * nsave + m]*array[indb][j * nsave + n];
-        } else {
-          if(i==0&&j==0) {
-	    local_count[k]+=1.0;
+	  //initialize counter for work distribution
+	  if(dynamics==NORMAL) m = lastindex - sample_start;
+	  else m = lastindex - (nsave - 1 - sample_start);
+	  if (m < 0) m = nsave+m;
+	  //printf("%d\n",m);
+	  int inda,indb;
+	  if(memory_switch==PERATOM){
+	    inda=indices_group[a];
+	    indb=indices_group[b];
+	  } else {
+	    inda = a;
+	    indb = b;
 	  }
-          local_corr[k][ipair]+= array[inda][i * nsave + m]*array[indb][j * nsave + n];
-        }
-          }
-          m--;
-          if (m < 0) m = nsave-1;
-        }
-      } else { //dynamics ORTHOGONAL/ORTHOGONALSECOND
-        for (k = sample_start; k > sample_stop; k--) {
-          if (variable_flag == VAR_DEPENDENED){
-        double dV = variable_store[inda][m] - variable_store[indb][n];
-        dV=fabs(dV);
-        if(dV<range){
-          int ind = dV/range*bins;
-          int offset= t*bins+ind;
-          //count once
-          if (type == AUTOCROSS && b!=a) {
-            if(i==0&&j==0) local_count[offset+corr_length/2]+=1.0;
-            local_corr[offset+corr_length/2][ipair] += array[inda][i*nsave+m]*array[indb][(j+nvalues+6)*nsave+k];
-          } else {
-            if(i==0&&j==0) local_count[offset]+=1.0;
-            local_corr[offset][ipair]+=array[inda][i * nsave + m]*array[indb][j * nsave + n];
-          }
-        }
-          } else if (variable_flag == DIST_DEPENDENED) {
-        double *dr = new double[3];
-        dr[0] = variable_store[inda][m] - variable_store[indb][n];
-        dr[1] = variable_store[inda][m+nsave] - variable_store[indb][n+nsave];
-        dr[2] = variable_store[inda][m+2*nsave] - variable_store[indb][n+2*nsave];
-	domain->minimum_image(dr[0],dr[1],dr[2]);
-        double dV = sqrt( dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2]);
-        //printf("dV=%f\n",dV);
-        if(dV<range){
-          double *res_data = new double[8];
-          double *inp_data = new double[6];
-          int p;
-          for (p=0; p<3; p++) inp_data[p] = array[inda][(i+p)*nsave+m];
-          for (p=0; p<3; p++) inp_data[p+3] = array[indb][(j+p+nvalues+6)*nsave+k];
-          decompose(res_data,dr,inp_data);
-          //for (int z=0; z<8; z++) printf("res_data[%d]=%f\n",z,res_data[z]);
-          // calculate correlation
-          int ind = dV/range*bins;
-          int offset= t*bins+ind;
-          if(i==0&&j==0) local_count[offset]+=1.0;
-          local_corr[offset][ipair] += res_data[0]*res_data[1];
-          if(i==0&&j==0) local_count[offset+corr_length/2]+=1.0;
-          local_corr[offset+corr_length/2][ipair] += res_data[2]*res_data[5]+res_data[3]*res_data[6]+res_data[4]*res_data[7];
-          delete[] res_data;
-          delete[] inp_data;
-        }
-        delete[] dr;
-          } else { //no variable dependency
-	    int offset= t;
-        if (type == AUTOCROSS && b!=a) {
-          if(i==0&&j==0) local_count[offset+corr_length/2]+=1.0;
-          local_corr[offset+corr_length/2][ipair] += array[inda][i*nsave+m]*array[indb][(j+nvalues+6)*nsave+k];
-        } else {
-          if(i==0&&j==0) local_count[offset]+=1.0;
-          local_corr[offset][ipair]+= array[inda][i*nsave+m]*array[indb][(j+nvalues+6)*nsave+k];
-        }
-          }
-          m--;
-          if (m < 0) m = nsave-1;
-        }
-      }
-    }
+	  if(dynamics==NORMAL){
+	    for (k = sample_start; k < sample_stop; k++) {
+	      if (variable_flag == VAR_DEPENDENED){
+		double dV = variable_store[inda][m] - variable_store[indb][n];
+		dV=fabs(dV);
+		if(dV<range){
+		  int ind = dV/range*bins;
+		  int offset= k*bins+ind;
+		  double val0 = array[indb][j * nsave + n];
+		  double valt = array[inda][i * nsave + m];
+		  double cor = val0*valt;
+		  if (type == AUTOCROSS && b!=a) {
+		    if(i==0&&j==0) local_count[offset+corr_length/2]+=1.0;
+		    local_corr[offset+corr_length/2][ipair] += cor;
+		    local_corr_err[offset+corr_length/2][ipair] += cor*cor;
+		  } else {
+		    if(i==0&&j==0) {
+		      local_count[offset]+=1.0;
+		    }
+		    local_corr[offset][ipair]+=cor;
+		    local_corr_err[offset][ipair]+=cor*cor;
+		  }
+		}
+	      } else if (variable_flag == DIST_DEPENDENED) {
+		double *dr = new double[3];
+		dr[0] = variable_store[inda][m] - variable_store[indb][n];
+		dr[1] = variable_store[inda][m+nsave] - variable_store[indb][n+nsave];
+		dr[2] = variable_store[inda][m+2*nsave] - variable_store[indb][n+2*nsave];
+		domain->minimum_image(dr[0],dr[1],dr[2]);
+		double dV = sqrt( dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2]);
+		if(dV<range){
+		  double *res_data = new double[8];
+		  double *inp_data = new double[6];
+		  int p;
+		  for (p=0; p<3; p++) inp_data[p] = array[inda][ (i+p) * nsave + m];
+		  for (p=0; p<3; p++) inp_data[p+3] = array[indb][ (j+p) * nsave + n];
+		  // calculate radial component of the forces (mapped on the distance vector)
+		  decompose(res_data,dr,inp_data);
+		  int ind = dV/range*bins;
+		  int offset= k*bins+ind;
+		  double val0 = res_data[1];
+		  double valt = res_data[0];
+		  double cor = val0*valt;
+		  if(i==0&&j==0) local_count[offset]+=1.0;
+		  local_corr[offset][ipair] += cor;
+		  local_corr_err[offset][ipair] += cor*cor;
+		  // angular component
+		  if(i==0&&j==0) local_count[offset+corr_length/2]+=1.0;
+		  cor = res_data[2]*res_data[5]+res_data[3]*res_data[6]+res_data[4]*res_data[7];
+		  local_corr[offset+corr_length/2][ipair] += cor;
+		  local_corr_err[offset+corr_length/2][ipair] += cor*cor;
+		  delete[] res_data;
+		  delete[] inp_data;
+		}
+		delete[] dr;
+	      } else { //no variable dependency
+		double val0 = array[indb][j * nsave + n];
+		double valt = array[inda][i * nsave + m];
+		double cor = val0*valt;
+		if (type == AUTOCROSS && b!=a) {
+		  if(i==0&&j==0) local_count[k+corr_length/2]+=1.0;
+		  local_corr[k+corr_length/2][ipair] += cor;
+		  local_corr_err[k+corr_length/2][ipair] += cor*cor;
+		} else {
+		  if(i==0&&j==0) local_count[k]+=1.0;
+		  local_corr[k][ipair]+= cor;
+		  local_corr_err[k][ipair]+= cor*cor;
+		}
+	      }
+	      m--;
+	      if (m < 0) m = nsave-1;
+	    }
+	  } else { //dynamics ORTHOGONAL/ORTHOGONALSECOND
+	    for (k = sample_start; k > sample_stop; k--) {
+	      if (variable_flag == VAR_DEPENDENED){
+		double dV = variable_store[inda][m] - variable_store[indb][n];
+		dV=fabs(dV);
+		if(dV<range){
+		  int ind = dV/range*bins;
+		  int offset= t*bins+ind;
+		  double val0 = array[indb][(j+nvalues+6)*nsave+k];
+		  double valt = array[inda][i*nsave+m];
+		  double cor = val0*valt;
+		  if (type == AUTOCROSS && b!=a) {
+		    if(i==0&&j==0) local_count[offset+corr_length/2]+=1.0;
+		    local_corr[offset+corr_length/2][ipair] += cor;
+		    local_corr_err[offset+corr_length/2][ipair] += cor*cor;
+		  } else {
+		    if(i==0&&j==0) local_count[offset]+=1.0;
+		    local_corr[offset][ipair]+= cor;
+		    local_corr_err[offset][ipair]+= cor*cor;
+		  }
+		}
+	      } else if (variable_flag == DIST_DEPENDENED) {
+		double *dr = new double[3];
+		dr[0] = variable_store[inda][m] - variable_store[indb][n];
+		dr[1] = variable_store[inda][m+nsave] - variable_store[indb][n+nsave];
+		dr[2] = variable_store[inda][m+2*nsave] - variable_store[indb][n+2*nsave];
+		domain->minimum_image(dr[0],dr[1],dr[2]);
+		double dV = sqrt( dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2]);
+		//printf("dV=%f\n",dV);
+		if(dV<range){
+		  double *res_data = new double[8];
+		  double *inp_data = new double[6];
+		  int p;
+		  for (p=0; p<3; p++) inp_data[p] = array[inda][(i+p)*nsave+m];
+		  for (p=0; p<3; p++) inp_data[p+3] = array[indb][(j+p+nvalues+6)*nsave+k];
+		  decompose(res_data,dr,inp_data);
+		  // calculate radial component of the forces (mapped on the distance vector)
+		  int ind = dV/range*bins;
+		  int offset= t*bins+ind;
+		  double val0 = res_data[1];
+		  double valt = res_data[0];
+		  double cor = val0*valt;
+		  if(i==0&&j==0) local_count[offset]+=1.0;
+		  local_corr[offset][ipair] += cor;
+		  local_corr_err[offset][ipair] += cor*cor;
+		  cor = res_data[2]*res_data[5]+res_data[3]*res_data[6]+res_data[4]*res_data[7];
+		  if(i==0&&j==0) local_count[offset+corr_length/2]+=1.0;
+		  local_corr[offset+corr_length/2][ipair] += cor;
+		  local_corr_err[offset+corr_length/2][ipair] += cor*cor;
+		  delete[] res_data;
+		  delete[] inp_data;
+		}
+		delete[] dr;
+	      } else { //no variable dependency
+		int offset= t;
+		double val0 = array[indb][(j+nvalues+6)*nsave+k];
+		double valt = array[inda][i*nsave+m];
+		double cor = val0*valt;
+		if (type == AUTOCROSS && b!=a) {
+		  if(i==0&&j==0) local_count[offset+corr_length/2]+=1.0;
+		  local_corr[offset+corr_length/2][ipair] += cor;
+		  local_corr_err[offset+corr_length/2][ipair] += cor*cor;
+		} else {
+		  if(i==0&&j==0) local_count[offset]+=1.0;
+		  local_corr[offset][ipair]+= cor;
+		  local_corr_err[offset][ipair]+= cor*cor;
+		}
+	      }
+	      m--;
+	      if (m < 0) m = nsave-1;
+	    }
+	  }
+	}
       }
       ipair++;
     }
   }
-
 }
 
 /* ----------------------------------------------------------------------
@@ -1623,7 +1657,6 @@ void FixAveCorrelatePeratom::decompose(double *res_data, double *dr, double *inp
 
   delete[] F1_p;
   delete[] F2_p;
-
 }
 
 /* ----------------------------------------------------------------------
@@ -1871,7 +1904,7 @@ void FixAveCorrelatePeratom::write_restart(FILE *fp){
   int ncount = corr_length;
   int ncorr = corr_length*npair;
   // count and correlation
-  int n = ncount+ ncorr;
+  int n = ncount+ 2*ncorr;
   // orth. dynamics
   if (dynamics == ORTHOGONAL || dynamics == ORTHOGONALSECOND){
     n += 3*nrepeat * (1 + nvalues) * ngroup_glo;
@@ -1889,6 +1922,7 @@ void FixAveCorrelatePeratom::write_restart(FILE *fp){
     // count and correlation
     fwrite(save_count,sizeof(double),ncount,fp);
     fwrite(&save_corr[0][0],sizeof(double),ncorr,fp);
+    fwrite(&save_corr_err[0][0],sizeof(double),ncorr,fp);
     // orth. dynamics
     if (dynamics == ORTHOGONAL || dynamics == ORTHOGONALSECOND){
       fwrite(&alpha[0][0],sizeof(double),3*nrepeat*nvalues*ngroup_glo,fp);
@@ -1923,6 +1957,9 @@ void FixAveCorrelatePeratom::restart(char *buf){
 
   for (i = 0; i < corr_length; i++)
     for (j = 0; j < npair; j++) save_corr[i][j] = dbuf[dcount++];
+    
+  for (i = 0; i < corr_length; i++)
+    for (j = 0; j < npair; j++) save_corr_err[i][j] = dbuf[dcount++];
 
   // orth. dynamics
   if (dynamics == ORTHOGONAL || dynamics == ORTHOGONALSECOND){

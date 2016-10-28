@@ -91,6 +91,7 @@ class FixAveCorrelatePeratom : public Fix {
   int npair;           // number of correlation pairs to calculate
   double *local_count,*global_count,*save_count;
   double **local_corr,**global_corr,**save_corr;
+  double **local_corr_err,**global_corr_err,**save_corr_err;
   int corr_length;
   
   int ngroup_glo;

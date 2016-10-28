@@ -61,7 +61,7 @@ void RanCor::init()
   init_acoeff();
 
   // init optimizer
-  NelderMeadOptimizer opt(2*mem_count-1, precision, mem_kernel, mem_count);
+  /*NelderMeadOptimizer opt(2*mem_count-1, precision, mem_kernel, mem_count);
   
   // request a simplex to start with
   Vector v(a_coeff,2*mem_count-1);
@@ -73,17 +73,20 @@ void RanCor::init()
   
   for (i=0; i<2*mem_count-1; i++) {
     a_coeff[i] = v[i];
-  }
+  }*/
   
   // print the memory
+  FILE * out;
+  out=fopen("ansatz.dat","w");
   for(n=0;n<mem_count;n++){
     double loc_sum = 0.0;
     for(s=0;s<2*mem_count-1;s++){
       if (n-s>0) continue;
       loc_sum += a_coeff[s]*a_coeff[n-s+2*mem_count-2];
     }
-    printf("%d %f %f\n",n,mem_kernel[n],loc_sum);
+    fprintf(out,"%d %f %f %f\n",n,mem_kernel[n],loc_sum,mem_kernel[n]-loc_sum);
   }
+   fclose(out);
   
   for (i=0; i<mem_count; i++) {
     mem_kernel[i]*=norm;
@@ -92,33 +95,29 @@ void RanCor::init()
     a_coeff[i]*=sqrt(norm);
   }
 #else //Prony-Series
+  double *mem_save = new double[mem_count]; 
   double norm = mem_kernel[0];
   for (int i=0; i<mem_count; i++) {
     mem_kernel[i] /= norm;
+    mem_save[i]=mem_kernel[i];
   }
 
-  int n_cos = 15;
-  int n_sin = 0;
-  a_coeff = new double[n_cos*3];
+  a_coeff = new double[6];
   
+  int N_prob = 5;
   
-  for (int j=1; j<=n_cos;j++) {
+  for (int j=0; j<N_prob;j++) {
   
-    int dim_cos = j*3;
-    int dim_sin = n_sin*4;
+    int dim_cos = 3;
+    int dim_sin = 3;
     int dim_tot = dim_cos + dim_sin;
   
-    a_coeff[dim_cos-3] = 0.1;
-    a_coeff[dim_cos-2] = 0.1;
-    a_coeff[dim_cos-1] = 0.1;
-  
-    for (n=0; n<mem_count; n++) {
-      double sum = 0.0;
-      for(s=0;s<dim_cos;s+=3){
-	sum += a_coeff[s]*exp(-a_coeff[s+1]*a_coeff[s+1]*n)*cos(a_coeff[s+2]*n);
-      }
-      printf("sum %f mem %f\n",sum, mem_kernel[n]);
-    }
+    a_coeff[0] = 0.1;
+    a_coeff[1] = 0.1;
+    a_coeff[2] = 0.1;
+    a_coeff[3] = 0.1;
+    a_coeff[4] = 0.1;
+    a_coeff[5] = 0.1;
   
     // init optimizer
     NelderMeadOptimizer opt(dim_cos,dim_tot, precision, mem_kernel, mem_count);
@@ -131,32 +130,25 @@ void RanCor::init()
     printf("optimizer quality: %f\n",min_function(v,dim_cos,dim_tot)); 
     
     
-    for (i=0; i<dim_cos; i++) a_coeff[i] = v[i];
+    for (i=0; i<dim_tot; i++) a_coeff[i] = v[i];
+    
+    for (n=0; n<mem_count; n++) {
+      double sum = 0;
+      for(s=0;s<dim_cos;s+=3){
+	sum += a_coeff[s]*exp(-a_coeff[s+1]*n)*cos(a_coeff[s+2]*n);
+      }
+      for(s=dim_cos;s<dim_tot;s+=3){
+	sum += a_coeff[s]*exp(-a_coeff[s+1]*n)*sin(a_coeff[s+2]*n);
+      }
+      mem_kernel[n]-=sum;
+    }
   
   }
   
-    int dim_cos = n_cos*3;
-    int dim_sin = n_sin*4;
-    int dim_tot = dim_cos + dim_sin;
-  
-  for (int i=0; i<dim_cos; i+=3) {
-    printf("cos coeff: %f %f %f\n",a_coeff[i], a_coeff[i+1], a_coeff[i+2]);
-  }
-  for (int i=dim_cos; i<dim_tot; i+=4) {
-    printf("sin coeff: %f %f %f %f\n",a_coeff[i], a_coeff[i+1], a_coeff[i+2],a_coeff[i+3]);
-  }
   FILE * out;
   out=fopen("ansatz.dat","w");
   for (n=0; n<mem_count; n++) {
-    double sum = 0;
-    for(s=0;s<dim_cos;s+=3){
-      sum += a_coeff[s]*exp(-a_coeff[s+1]*a_coeff[s+1]*n)*cos(a_coeff[s+2]*n);
-    }
-    for(s=dim_cos;s<dim_tot;s+=4){
-      if (n>=a_coeff[i+3])
-	sum += a_coeff[s]*exp(-a_coeff[s+1]*a_coeff[s+1]*n)*sin(a_coeff[s+2]*n);
-    }
-    fprintf(out,"%d %f %f\n",n,sum, mem_kernel[n]);
+    fprintf(out,"%d %f %f %f\n",n,mem_save[n],mem_save[n]-mem_kernel[n],mem_kernel[n]);
   }
   fclose(out);
 
@@ -234,24 +226,13 @@ void RanCor::init_opt(NelderMeadOptimizer &opt, Vector v, int dim_cos, int dim_t
   int d,i;
   for (i=0; i<dim_tot; i++) {
     Vector new_v(a_coeff,dim_tot);
-    for (d=0; d<dim_cos; d++) {
+    for (d=0; d<dim_tot; d++) {
       if (d!=i) {
 	new_v[d] += q;
       } else {
 	new_v[d] += p;
       }
     }
-    for (d=dim_cos; d<dim_tot; d++) {
-      int factor = 1;
-      if ((d-dim_cos)%3==0) factor = 100;
-      if (d!=i) {
-	new_v[d] += q*factor;
-      } else {
-	new_v[d] += p*factor;
-      }
-      
-    }
-
     opt.insert(new_v,min_function(new_v,dim_cos,dim_tot));
   }
 }
@@ -281,11 +262,10 @@ double RanCor::min_function(Vector v, int dim_cos, int dim_tot) {
 	  for(n=0;n<mem_count;n++){
 	    double loc_sum = 0.0;
 	    for(s=0;s<dim_cos;s+=3){
-	      loc_sum += a_coeff[s]*exp(-a_coeff[s+1]*a_coeff[s+1]*n)*cos(a_coeff[s+2]*n);
+	      loc_sum += v[s]*exp(-v[s+1]*n)*cos(v[s+2]*n);
 	    }
-	    for(s=dim_cos;s<dim_tot;s+=4){
-	      if (n>=a_coeff[s+3])
-	      loc_sum += a_coeff[s]*exp(a_coeff[s+1]*n)*sin(a_coeff[s+2]*n);
+	    for(s=dim_cos;s<dim_tot;s+=3){
+	      loc_sum += v[s]*exp(-v[s+1]*n)*sin(v[s+2]*n);
 	    }
 	    loc_sum -= mem_kernel[n];   
 	    sum += loc_sum*loc_sum;

@@ -1024,15 +1024,13 @@ void FixAveCorrelatePeratom::end_of_step()
 	  }
 	}
 	if(valid) {
-	  for (r = 0; r < 3; r++) {
-	    double x_loc = x[a][0];
-	    double y_loc = x[a][1];
-	    double z_loc = x[a][2];
-	    domain->minimum_image(x_loc,y_loc,z_loc);
-	    group_data_loc[valid-1][nvalues+include_orthogonal] += x_loc;
-	    group_data_loc[valid-1][nvalues+include_orthogonal+1] += y_loc;
-	    group_data_loc[valid-1][nvalues+include_orthogonal+2] += z_loc; 
-	  }
+	  double x_loc = x[a][0];
+	  double y_loc = x[a][1];
+	  double z_loc = x[a][2];
+	  domain->minimum_image(x_loc,y_loc,z_loc);
+	  group_data_loc[valid-1][nvalues+include_orthogonal] += x_loc;
+	  group_data_loc[valid-1][nvalues+include_orthogonal+1] += y_loc;
+	  group_data_loc[valid-1][nvalues+include_orthogonal+2] += z_loc; 
 	}
       }
     }
@@ -1485,7 +1483,7 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 	double ngroup_lower = a;
 	double ngroup_upper = a+1;
 	if (type == CROSS || type == AUTOCROSS){
-	  ngroup_lower = a;
+	  ngroup_lower = 0;
 	  ngroup_upper = ngroup_glo;
 	}
 	for (b = ngroup_lower; b < ngroup_upper; b++) {
@@ -1529,9 +1527,9 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 		}
 	      } else if (variable_flag == DIST_DEPENDENED) {
 		double *dr = new double[3];
-		dr[0] = variable_store[inda][m] - variable_store[indb][n];
-		dr[1] = variable_store[inda][m+nsave] - variable_store[indb][n+nsave];
-		dr[2] = variable_store[inda][m+2*nsave] - variable_store[indb][n+2*nsave];
+		dr[0] = variable_store[indb][n]-variable_store[inda][m]  ;
+		dr[1] = variable_store[indb][n+nsave]-variable_store[inda][m+nsave]  ;
+		dr[2] =  variable_store[indb][n+2*nsave]-variable_store[inda][m+2*nsave];
 		domain->minimum_image(dr[0],dr[1],dr[2]);
 		double dV = sqrt( dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2]);
 		if(dV<range){
@@ -1543,6 +1541,7 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 		  // calculate radial component of the forces (mapped on the distance vector)
 		  decompose(res_data,dr,inp_data);
 		  int ind = dV/range*bins;
+		  
 		  int offset= k*bins+ind;
 		  double val0 = res_data[1];
 		  double valt = res_data[0];
@@ -1599,9 +1598,9 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 		}
 	      } else if (variable_flag == DIST_DEPENDENED) {
 		double *dr = new double[3];
-		dr[0] = variable_store[inda][m] - variable_store[indb][n];
-		dr[1] = variable_store[inda][m+nsave] - variable_store[indb][n+nsave];
-		dr[2] = variable_store[inda][m+2*nsave] - variable_store[indb][n+2*nsave];
+		dr[0] = variable_store[indb][n]-variable_store[inda][m] ;
+		dr[1] = variable_store[indb][n+nsave]-variable_store[inda][m+nsave]  ;
+		dr[2] = variable_store[indb][n+2*nsave]-variable_store[inda][m+2*nsave]  ;
 		domain->minimum_image(dr[0],dr[1],dr[2]);
 		double dV = sqrt( dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2]);
 		//printf("dV=%f\n",dV);
@@ -1672,8 +1671,8 @@ void FixAveCorrelatePeratom::decompose(double *res_data, double *dr, double *inp
     F2_p[p] = proj2*dr[p];
   }
   // parallel components
-  res_data[0] = sgn(proj1)*sqrt( F1_p[0]*F1_p[0] + F1_p[1]*F1_p[1] + F1_p[2]*F1_p[2] );
-  res_data[1] = sgn(-proj2)*sqrt( F2_p[0]*F2_p[0] + F2_p[1]*F2_p[1] + F2_p[2]*F2_p[2] );
+  res_data[0] = sgn(-proj1)*sqrt( F1_p[0]*F1_p[0] + F1_p[1]*F1_p[1] + F1_p[2]*F1_p[2] );
+  res_data[1] = sgn(proj2)*sqrt( F2_p[0]*F2_p[0] + F2_p[1]*F2_p[1] + F2_p[2]*F2_p[2] );
   // orthogonal components
   for (p=0; p<3; p++){
     res_data[2+p] = inp_data[p] - F1_p[p];
@@ -1699,11 +1698,13 @@ void FixAveCorrelatePeratom::calc_mean(int *indices_group, int ngroup_loc){
   for (i = 0; i < nvalues; i+=incr_nvalues) {
     for (a= 0; a < ngroup_glo; a++) {
       //determine whether just autocorrelation or also cross correlation (different atoms)
+      double ngroup_lower = a;
       double ngroup_upper = a+1;
       if (type == CROSS || type == AUTOCROSS){
+	ngroup_lower = 0;
 	ngroup_upper = ngroup_glo;
       }
-      for (b = a; b < ngroup_upper; b++) {
+      for (b = ngroup_lower; b < ngroup_upper; b++) {
 	if (type == CROSS && a==b) continue;
 	int inda,indb;
 	if(memory_switch==PERATOM){
@@ -1722,11 +1723,10 @@ void FixAveCorrelatePeratom::calc_mean(int *indices_group, int ngroup_loc){
 	    mean[ind*nvalues+i] += array[inda][i * nsave + lastindex];
 	  }
 	} else if (variable_flag == DIST_DEPENDENED) {
-
 	  double *dr = new double[3];
-	  dr[0] = variable_store[inda][lastindex] - variable_store[indb][lastindex];
-	  dr[1] = variable_store[inda][lastindex+nsave] - variable_store[indb][lastindex+nsave];
-	  dr[2] = variable_store[inda][lastindex+2*nsave] - variable_store[indb][lastindex+2*nsave];
+	  dr[0] = variable_store[indb][lastindex]- variable_store[inda][lastindex] ;
+	  dr[1] = variable_store[indb][lastindex+nsave]-variable_store[inda][lastindex+nsave]  ;
+	  dr[2] =  variable_store[indb][lastindex+2*nsave] -variable_store[inda][lastindex+2*nsave];
 	  domain->minimum_image(dr[0],dr[1],dr[2]);
 	  double dV = sqrt( dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2]);
 
@@ -1741,9 +1741,8 @@ void FixAveCorrelatePeratom::calc_mean(int *indices_group, int ngroup_loc){
 	    //for (int z=0; z<8; z++) printf("res_data[%d]=%f\n",z,res_data[z]);
 	    // calculate correlation
 	    int ind = dV/range*bins;
-	    if(i==0) mean_count[ind]+=2.0;
+	    if(i==0) mean_count[ind]+=1.0;
 	    mean[ind*nvalues+i] += res_data[0];
-	    mean[ind*nvalues+i] += res_data[1];
 	    delete[] res_data;
 	    delete[] inp_data;
 	  }

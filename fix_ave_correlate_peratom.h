@@ -74,6 +74,7 @@ class FixAveCorrelatePeratom : public Fix {
   int factor;
   double range;
   double **variable_store;
+  int v_counter;
   
   char *title1,*title2,*title3;
   long filepos;

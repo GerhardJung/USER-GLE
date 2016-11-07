@@ -131,6 +131,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   mean_flag = 0;
   variable_nvalues = 0;
   overwrite = 0;
+  v_counter = 0;
   char *title1 = NULL;
   char *title2 = NULL;
   char *title3 = NULL;
@@ -240,8 +241,10 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
 	      which[i] = FIX;
 	    }
 	    else if (loc_arg[0] == 'v') {
+	      printf("variable1\n");
 	      cor_valbit[i] = 9;
 	      which[i] = VARIABLE; 
+	      v_counter++;
 	    }
 	    
 	    int n = strlen(loc_arg);
@@ -892,6 +895,27 @@ void FixAveCorrelatePeratom::end_of_step()
       }
     }
   } else { //calculate group properties
+    //evaluate all variable and compute all computes
+    double v_store[v_counter*nlocal];
+    int v_counter_loc = 0;
+    for (i = 0; i < nvalues; i++) {
+      switch ( cor_valbit[i] ) {
+	case 7: {
+	  Compute *compute = modify->compute[value2index[i]];
+	  if(!(compute->invoked_flag & INVOKED_PERATOM)) {
+	    compute->compute_peratom();
+	    compute->invoked_flag |= INVOKED_PERATOM;
+	  }
+	}
+	break;
+	case 9: {
+	  input->variable->compute_atom(value2index[i],igroup,&v_store[v_counter_loc],v_counter,0);
+	  v_counter_loc++;
+	}
+	break;
+      }
+    }
+
     counter = new int[ngroup_glo];
     counter_glo = new int[ngroup_glo];
     for ( j = 0; j < ngroup_glo; j++) counter[j]=counter_glo[j]=0;
@@ -906,6 +930,7 @@ void FixAveCorrelatePeratom::end_of_step()
       }
       
       if(valid) {
+	v_counter_loc = 0;
 	for (i = 0; i < nvalues; i++) {
 	  double data = 0.0;
 	  switch ( cor_valbit[i] ) {
@@ -928,16 +953,9 @@ void FixAveCorrelatePeratom::end_of_step()
 	      data = f[a][2];
 	    break;
 	    case 7: {
-	      Compute *compute = modify->compute[v2i];
-	      if(!(compute->invoked_flag & INVOKED_PERATOM)) {
-		compute->compute_peratom();
-		compute->invoked_flag |= INVOKED_PERATOM;
-	      }
-	      if (argindex[i] == 0) {
-		data = compute->vector_atom[a];
-	      } else {
-		data= compute->array_atom[argindex[i]-1][a];
-	      }
+	      Compute *compute = modify->compute[value2index[i]];
+	      if (argindex[i] == 0) data = compute->vector_atom[a];
+	      else data= compute->array_atom[argindex[i]-1][a];
 	    }
 	    break;
 	    case 8: {
@@ -946,7 +964,8 @@ void FixAveCorrelatePeratom::end_of_step()
 	    }
 	    break;
 	    case 9: {
-	      printf("corvalbit %d\n",cor_valbit[i]);
+	      data=v_store[a*v_counter+v_counter_loc];
+	      v_counter_loc++;
 	    }
 	    break;
 	  }
@@ -1006,7 +1025,13 @@ void FixAveCorrelatePeratom::end_of_step()
 	}
 	if(valid) {
 	  for (r = 0; r < 3; r++) {
-	    group_data_loc[valid-1][nvalues+include_orthogonal+r] += x[a][r];
+	    double x_loc = x[a][0];
+	    double y_loc = x[a][1];
+	    double z_loc = x[a][2];
+	    domain->minimum_image(x_loc,y_loc,z_loc);
+	    group_data_loc[valid-1][nvalues+include_orthogonal] += x_loc;
+	    group_data_loc[valid-1][nvalues+include_orthogonal+1] += y_loc;
+	    group_data_loc[valid-1][nvalues+include_orthogonal+2] += z_loc; 
 	  }
 	}
       }

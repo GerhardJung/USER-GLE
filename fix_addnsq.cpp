@@ -129,7 +129,7 @@ FixAddNsq::FixAddNsq(LAMMPS *lmp, int narg, char **arg) :
   memory->create(group_v,ngroup_glo,6*n_pot,"addnsq:group_v");
   
   //create array if checkpoint is necessary
-  if ( checkpoint != -1 ) {
+  if ( peratom_flag  ) {
     nmax = atom->nmax;
     memory->create(array,nmax,3,"addnsq:array");
     array_atom = array;
@@ -150,6 +150,9 @@ FixAddNsq::~FixAddNsq()
   memory->destroy(group_f);
   memory->destroy(group_e);
   memory->destroy(group_v);
+  
+  if (peratom_flag) memory->destroy(array);
+  
 
 }
 

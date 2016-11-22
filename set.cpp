@@ -596,7 +596,7 @@ void Set::set(int keyword)
 int me=0;
   MPI_Comm_rank(world,&me);
   for (int i = 0; i < nlocal; i++) {
-    if (!select[i] || ( N != -1 && counter > N) || me != 0 ) continue;
+    if (!select[i] || ( N != -1 && counter > N) || ( N != -1 && me != 0 ) ) continue;
     counter++;
     // overwrite dvalue, ivalue, xyzw value if variables defined
     // else the input script scalar value remains in place

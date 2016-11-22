@@ -37,6 +37,10 @@ class ComputeMemoryVolterra : public Compute {
 
  private:
   int memory_switch;
+  int ngroup_glo;
+  char **groups;
+  int nvalues;
+  char **values;
   int nevery,nrepeat,nfreq,nevery_corr;
   int me;
   

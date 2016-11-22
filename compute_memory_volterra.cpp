@@ -69,13 +69,33 @@ ComputeMemoryVolterra::ComputeMemoryVolterra(LAMMPS * lmp, int narg, char **arg)
   int iarg = 6;
   while (iarg < narg) {
     if (strcmp(arg[iarg],"switch") == 0) {
-      if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
+      if (iarg+2 > narg) error->all(FLERR,"Illegal compute memory/volterra command");
       if (strcmp(arg[iarg+1],"peratom") == 0) memory_switch = PERATOM;
       else if (strcmp(arg[iarg+1],"pergroup") == 0) memory_switch = PERGROUP;
-      else if (strcmp(arg[iarg+1],"group") == 0) memory_switch = GROUP;
-      else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
+      else if (strcmp(arg[iarg+1],"group") == 0) {
+	memory_switch = GROUP;
+	if (iarg+3 > narg) error->all(FLERR,"Illegal compute memory/volterra command");
+	ngroup_glo = force->inumeric(FLERR,arg[iarg+2]);
+	if (iarg+4+ngroup_glo > narg) error->all(FLERR,"Illegal compute memory/volterra command");
+	groups =  new char*[ngroup_glo];
+	for (int i=0; i<ngroup_glo; i++) {
+	  int n = strlen(arg[iarg+3+i]);
+	  groups[i] = new char[n];
+	  strcpy(groups[i],arg[iarg+3+i]);
+	}
+	nvalues = force->inumeric(FLERR,arg[iarg+3+ngroup_glo]);
+	values =  new char*[nvalues];
+	if (iarg+4+ngroup_glo+nvalues > narg) error->all(FLERR,"Illegal compute memory/volterra command");
+	for (int i=0; i<nvalues; i++) {
+	  char *loc_arg = arg[iarg+4+ngroup_glo+i];
+	  int n = strlen(arg[iarg+4+ngroup_glo+i]);
+	  values[i] = new char[n];
+	  strcpy(values[i],arg[iarg+4+ngroup_glo+i]);
+	}
+	iarg += 2 + ngroup_glo + nvalues;
+      } else error->all(FLERR,"Illegal compute memory/volterra command");
       iarg += 2;
-    } else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
+    } else error->all(FLERR,"Illegal compute memory/volterra command");
   }
 
   // setup and error check
@@ -127,12 +147,12 @@ ComputeMemoryVolterra::ComputeMemoryVolterra(LAMMPS * lmp, int narg, char **arg)
     fix = (FixAveCorrelatePeratom *) modify->fix[modify->nfix-1];
     delete [] newarg_f;
   } else {
-    int narg_corr = 22;
+    int narg_corr = 15 + ngroup_glo + nvalues;
     char **newarg_f = new char*[narg_corr];
-    char c_1[15];
-    sprintf(c_1, "%d", 1);
-    char c_6[15];
-    sprintf(c_6, "%d", 6);
+    char c_group[15];
+    sprintf(c_group, "%d", ngroup_glo);
+    char c_values[15];
+    sprintf(c_values, "%d", nvalues);
     newarg_f[0] = id_fix;
     newarg_f[1] = group->names[igroup];
     newarg_f[2] = (char *) "ave/correlate/peratom";
@@ -143,9 +163,14 @@ ComputeMemoryVolterra::ComputeMemoryVolterra(LAMMPS * lmp, int narg, char **arg)
     newarg_f[8] = (char *) "ave"; newarg_f[9] = (char *) "running";
     newarg_f[10] = (char *) "restart";
     newarg_f[11] = (char *) "switch"; newarg_f[12] = (char *) "group";
-    newarg_f[13] = c_1; newarg_f[14] = (char *) "colloid";
-    newarg_f[15] = c_6; newarg_f[16] = (char *) "vx"; newarg_f[17] = (char *) "vy"; newarg_f[18] = (char *) "vz"; 
-    newarg_f[19] = (char *) "fx"; newarg_f[20] = (char *) "fy"; newarg_f[21] = (char *) "fz";
+    newarg_f[13] = c_group; 
+    for (int i=0; i<ngroup_glo; i++) {
+      newarg_f[14+i] = groups[i];
+    }
+    newarg_f[14+ngroup_glo] = c_values; 
+    for (int i=0; i<nvalues; i++) {
+      newarg_f[15+ngroup_glo+i] = values[i];
+    }
     modify->add_fix(narg_corr,newarg_f);
     fix = (FixAveCorrelatePeratom *) modify->fix[modify->nfix-1];
     delete [] newarg_f;
@@ -166,7 +191,9 @@ ComputeMemoryVolterra::ComputeMemoryVolterra(LAMMPS * lmp, int narg, char **arg)
       else mass_loc+=a_mass[type[a]];
     }
   }
-  MPI_Reduce(&mass_loc, &mass, 1, MPI_DOUBLE, MPI_MAX, 0, world);
+  MPI_Allreduce(&mass_loc, &mass, 1, MPI_DOUBLE, MPI_MAX, world);
+  
+  printf("mass %f\n",mass);
   
   // allocate memory
   memory->create(array,nrepeat,nmem,"memory/volterra:array");
@@ -227,13 +254,13 @@ void ComputeMemoryVolterra::compute_array()
     
     for(i = 1; i<nrepeat; i++){
       //denum = C(0)+dt*C'(i)
-      double denum = mass*mass*corr[0][3*j]+0.5*mass*update->dt*corr[i][3*j+1];
+      double denum = mass*mass*corr[0][3*j]+0.5*mass*update->dt*nevery_corr*corr[i][3*j+1];
       //num = C''(i)-dt*sum(C'(i-ip)*k(ip))
       double num = corr[i][3*j+2];
-      num -= 0.5*mass*corr[i][3*j+1]*array[0][j]*update->dt;
+      num -= 0.5*mass*corr[i][3*j+1]*array[0][j]*update->dt*nevery_corr;
       int ip;
       for(ip = 1; ip<i; ip++){
-	num -= mass*update->dt*corr[i-ip][3*j+1]*array[ip][j];
+	num -= mass*update->dt*nevery_corr*corr[i-ip][3*j+1]*array[ip][j];
       }
       //printf("num=%f, denum=%f\n",num,denum);
       array[i][j]=num/denum;
@@ -248,11 +275,11 @@ void ComputeMemoryVolterra::compute_array()
     
   memory->destroy(corr);
   } else {
-     int i,j;
+    int i,j;
     for (j = 0; j<nmem; j++){
-    for(i = 0; i<nrepeat; i++){
-      array[i][j] = 0;
+      for(i = 0; i<nrepeat; i++){
+	array[i][j] = 0;
+      }
     }
-  }
   }
 }

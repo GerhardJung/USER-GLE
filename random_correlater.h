@@ -22,7 +22,7 @@ namespace LAMMPS_NS {
 
 class RanCor : protected Pointers {
  public:
-  RanCor(class LAMMPS *, int, double*, double);
+  RanCor(class LAMMPS *, int, double*, double,double);
   ~RanCor();
   double gaussian(double*, int);
 
@@ -34,6 +34,7 @@ class RanCor : protected Pointers {
   double *a_coeff;
   double *a_coeff_small;
   double rho;
+  double t_target;
   
   void init();
   double min_function(Vector, int, int);

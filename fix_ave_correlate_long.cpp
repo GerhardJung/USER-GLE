@@ -512,7 +512,7 @@ void FixAveCorrelateLong::evaluate() {
       t[jm] = j;
       for (int i=0;i<npair;++i){
 	f[i][jm] = correlation[i][0][j]/ncorrelation[0][j];
-        df[i][jm] = correlation[i][0][j]/ncorrelation[0][j];
+        df[i][jm] = dcorrelation[i][0][j]/ncorrelation[0][j];
       }
       ++jm;
     }
@@ -525,7 +525,7 @@ void FixAveCorrelateLong::evaluate() {
         t[jm] = j * pow((double)m, k);
         for (int i=0;i<npair;++i){
           f[i][jm] = correlation[i][k][j] / ncorrelation[k][j];
-	  df[i][jm] = correlation[i][k][j] / ncorrelation[k][j];
+	  df[i][jm] = dcorrelation[i][k][j] / ncorrelation[k][j];
 	}
         ++jm;
       }

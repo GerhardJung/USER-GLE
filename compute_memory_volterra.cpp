@@ -191,7 +191,10 @@ ComputeMemoryVolterra::ComputeMemoryVolterra(LAMMPS * lmp, int narg, char **arg)
       else mass_loc+=a_mass[type[a]];
     }
   }
-  MPI_Allreduce(&mass_loc, &mass, 1, MPI_DOUBLE, MPI_MAX, world);
+  if (memory_switch != GROUP)
+    MPI_Allreduce(&mass_loc, &mass, 1, MPI_DOUBLE, MPI_MAX, world);
+  else
+    MPI_Allreduce(&mass_loc, &mass, 1, MPI_DOUBLE, MPI_SUM, world);
   
   printf("mass %f\n",mass);
   

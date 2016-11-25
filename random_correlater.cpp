@@ -25,11 +25,12 @@ using namespace LAMMPS_NS;
 
 /* ---------------------------------------------------------------------- */
 
-RanCor::RanCor(LAMMPS *lmp, int mem_count, double *mem_kernel, double precision) : Pointers(lmp)
+RanCor::RanCor(LAMMPS *lmp, int mem_count, double *mem_kernel, double precision, double t_target) : Pointers(lmp)
 {
   this->mem_count = mem_count;
   this->mem_kernel = mem_kernel;
   this->precision = precision;
+  this->t_target = t_target;
   
   // init the coefficients for the correlation and the memory for the uncorrelated random numbers
   srand(time(NULL));
@@ -54,7 +55,7 @@ void RanCor::init()
   // rescale memory (for optimizer)
   double norm = mem_kernel[0];
   for (int i=0; i<mem_count; i++) {
-    mem_kernel[i] /= norm;
+    //mem_kernel[i] =exp(-19.30*i*0.005)*cos(28.25*i*0.005);
   }
   
   // init coeff by fourier transformation
@@ -78,22 +79,30 @@ void RanCor::init()
   // print the memory
   FILE * out;
   out=fopen("ansatz.dat","w");
+  int N = mem_count-1;
   for(n=0;n<mem_count;n++){
     double loc_sum = 0.0;
-    for(s=0;s<2*mem_count-1;s++){
-      if (n-s>0) continue;
-      loc_sum += a_coeff[s]*a_coeff[n-s+2*mem_count-2];
+    for(s=-N;s<N;s++){
+      if (n-s> N) continue;
+      loc_sum += a_coeff[s+N]*a_coeff[n-s+N];
     }
     fprintf(out,"%d %f %f %f\n",n,mem_kernel[n],loc_sum,mem_kernel[n]-loc_sum);
   }
    fclose(out);
   
-  for (i=0; i<mem_count; i++) {
+  /*for (i=0; i<mem_count; i++) {
     mem_kernel[i]*=norm;
   }
   for (i=0; i<2*mem_count-1; i++) {
     a_coeff[i]*=sqrt(norm);
+  }*/
+  
+  // correct parameters to fullfil FDT
+  printf("%f\n",t_target);
+  for (i=0; i<2*mem_count-1; i++) {
+    a_coeff[i]*=sqrt(t_target);
   }
+  
 #else //Prony-Series
   double *mem_save = new double[mem_count]; 
   double norm = mem_kernel[0];
@@ -178,27 +187,44 @@ double RanCor::gaussian(double* normal, int lastindex)
   ----------------------------------------------------------------------  */
 void RanCor::init_acoeff() {
   
-  int N = 2*mem_count-1;
+  int N = mem_count-1;
   
-  a_coeff = new double[N];
-  for (int i=0; i< N; i++) a_coeff[i]=0.0;
+  a_coeff = new double[2*N+1];
+  for (int i=0; i<= 2*N; i++) a_coeff[i]=0.0;
   
-  complex<double> FT_mem_kernel[N];
+  complex<double> FT_mem_kernel[2*N];
   
   forwardDFT(mem_kernel,N ,FT_mem_kernel);
+  FILE * out;
+  out=fopen("ft_mem.dat","w");
+  for (int i=0; i< 2*N; i++) {
+    fprintf(out,"%d %f\n",i,FT_mem_kernel[i].real());
+  }
+  fclose(out);
   
-  complex<double> FT_a_coeff[N];
+  complex<double> FT_a_coeff[2*N];
   
-  for (int i=0; i<N;i++)
+  for (int i=0; i<2*N;i++)
    FT_a_coeff[i] = sqrt(FT_mem_kernel[i]);
   
+  out=fopen("sqrt_ft_mem.dat","w");
+  for (int i=0; i< 2*N; i++) {
+    fprintf(out,"%d %f %f\n",i,FT_a_coeff[i].real(),FT_a_coeff[i].imag());
+  }
+  fclose(out);
+  
   inverseDFT(FT_a_coeff,N, a_coeff);
+  out=fopen("as.dat","w");
+  for (int i=0; i<= 2*N; i++) {
+    fprintf(out,"%d %f\n",i,a_coeff[i]);
+  }
+  fclose(out);
   
   /*for(int s=0;s<N;s++){
     printf("%d %f\n",s,a_coeff[s]);
   }*/
   
-  int n,s;
+  /*int n,s;
   for(n=0;n<mem_count;n++){
     double loc_sum = 0.0;
     for(s=0;s<N;s++){
@@ -206,7 +232,7 @@ void RanCor::init_acoeff() {
       loc_sum += a_coeff[s]*a_coeff[n-s+N-1];
     }
     printf("%d %f %f\n",n,mem_kernel[n],loc_sum);
-  }
+  }*/
   
   //error->all(FLERR,"break");
 }
@@ -277,15 +303,15 @@ double RanCor::min_function(Vector v, int dim_cos, int dim_tot) {
   performs a forward DFT of reell (and symmetric) input
   ----------------------------------------------------------------------  */
 void RanCor::forwardDFT(double *data, int N, complex<double> *result) { 
-  for (int k = -mem_count+1; k < mem_count; k++) { 
-    result[k+mem_count-1].real(0.0);
-    result[k+mem_count-1].imag(0.0);
-    for (int n = -mem_count+1; n < mem_count; n++) { 
+  for (int k = -N; k < N; k++) { 
+    result[k+N].real(0.0);
+    result[k+N].imag(0.0);
+    for (int n = -N; n < N; n++) { 
       double data_loc = 0.0;
-      if (n<0) data_loc = data[abs(n)];
+      if(n<0) data_loc = data[abs(n)];
       else data_loc = data[n];
-      result[k+mem_count-1].real( result[k+mem_count-1].real() + data_loc * cos(2*M_PI / N * n * k));
-      result[k+mem_count-1].imag( result[k+mem_count-1].imag() - data_loc * sin(2*M_PI / N * n * k));
+      result[k+N].real( result[k+N].real() + data_loc * cos(M_PI / N * n * k));
+      result[k+N].imag( result[k+N].imag() - data_loc * sin(M_PI / N * n * k));
     } 
   } 
 }
@@ -294,12 +320,12 @@ void RanCor::forwardDFT(double *data, int N, complex<double> *result) {
   performs a backward DFT with complex input (and reell output)
   ----------------------------------------------------------------------  */
 void RanCor::inverseDFT(complex<double> *data, int N, double *result) { 
-  for (int n = -mem_count+1; n < mem_count; n++) { 
-    result[n+mem_count-1] = 0.0; 
-    for (int k = -mem_count+1; k < mem_count; k++) { 
-      result[n+mem_count-1] += data[k+mem_count-1].real() * cos(2*M_PI / N * n * k) - data[k+mem_count-1].imag() * sin(2*M_PI / N * n * k);
+  for (int n = -N; n <= N; n++) { 
+    result[n+N] = 0.0; 
+    for (int k = -N; k < N; k++) { 
+      result[n+N] += data[k+N].real() * cos(M_PI / N * n * k)-data[k+N].imag() * sin(M_PI / N * n * k);
     } 
-    result[n+mem_count-1] /= N;
+    result[n+N] /= (2*N);
   } 
 }
 

@@ -22,7 +22,7 @@ namespace LAMMPS_NS {
 
 class RanCor : protected Pointers {
  public:
-  RanCor(class LAMMPS *, int, double*, double,double);
+  RanCor(class LAMMPS *, int, double*, double);
   ~RanCor();
   double gaussian(double*, int);
 
@@ -42,7 +42,7 @@ class RanCor : protected Pointers {
   void init_acoeff();
   
   void forwardDFT(double *data, int N, complex<double> *result);
-  void inverseDFT(complex<double> *data, int N, double *result);
+  void inverseDFT(complex<double> *data, int N, double *result, double *result_imag);
   
   FILE * test_out;
   

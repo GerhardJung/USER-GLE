@@ -91,8 +91,8 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   
   // initialize correlated RNG with processor-unique seed
   random = new RanMars(lmp,seed + comm->me);
-  precision = 0.0002;
-  random_correlator = new RanCor(lmp,mem_count, mem_kernel, precision, t_target);
+  precision = 0.000002;
+  random_correlator = new RanCor(lmp,mem_count, mem_kernel, precision);
   
   // allocate and init per-atom arrays (velocity and normal random number)
   

@@ -236,7 +236,7 @@ class NelderMeadOptimizer {
 	  extr_values[2] = 0.0;
 	  
 	  for (int i = 0; i<dimension+1; i++) {
-	    double val = f(vectors[i]);
+	    double val = p(vectors[i]);
 	    if (val < extr_values[0]) {
 	      extr_values[0] = val;
 	      extr_ind[0] = i;
@@ -282,12 +282,12 @@ class NelderMeadOptimizer {
 			//printf("best=%d/%f, sworst=%d/%f, worst=%d/%f\n",extr_ind[0],vbest,extr_ind[1],vsworst,extr_ind[2],vworst);
                         // reflect
                         Vector reflected = cog + (cog - worst)*alpha;
-			double vreflected = f(reflected);
+			double vreflected = p(reflected);
 			if (vreflected < vbest) {
 			  //print_comp(reflected);
 			    //expand
                             Vector expanded = cog + (cog - worst)*gamma;
-			    double vexpanded = f(expanded);
+			    double vexpanded = p(expanded);
                             if (vexpanded < vreflected) {
 			      //printf("expanded\n");
                                 vectors[extr_ind[2]] = expanded;
@@ -307,7 +307,7 @@ class NelderMeadOptimizer {
 			    Vector h;
 			    h.prepare(dimension);
 			    Vector contracted = cog + (worst - cog)*beta;
-                            if (f(contracted) > vworst) {
+                            if (p(contracted) > vworst) {
 			      	//printf("rescaled\n");
                                 for (int i=0; i<dimension+1; i++) {
                                     vectors[i] = (vectors[i]+best)/2.0;
@@ -319,7 +319,7 @@ class NelderMeadOptimizer {
                             }
                         }
                         if (counter%100==0)
-			  printf("count %d: best value: %f\n",counter,f(best));
+			  printf("count %d: best value: %f\n",counter,p(best));
 			counter++;
 			
                     }

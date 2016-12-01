@@ -55,7 +55,7 @@ void RanCor::init()
   int i_incr = 0;
   double norm = mem_kernel[i_incr];
   for (int i=0; i<mem_count; i++) {
-    //mem_kernel[i] =  norm*exp(-19.30*i*0.005)*cos(28.25*i*0.005) ;
+    mem_kernel[i] =  norm*exp(-19.30*i*update->dt)*cos(28.25*i*update->dt) ;
     //if (i >= i_incr) mem_kernel[i] = mem_kernel[i]/2 +  norm/2*exp(-9.30*(i-i_incr)*0.005);
   }
   
@@ -150,13 +150,15 @@ void RanCor::init()
 /* ----------------------------------------------------------------------
    gaussian RN
 ------------------------------------------------------------------------- */
-double RanCor::gaussian(double* normal, int lastindex)
+double RanCor::gaussian(double* normal, int firstindex)
 {
   // calculate corr. random number
   int i,j;
   double ran = 0.0;
-  j = lastindex;
+  j = firstindex;
   for (i=0; i<2*mem_count-1; i++) {
+    int ind = i;
+    if (ind >= 2*mem_count-1) ind -= 2*mem_count-1;
     ran += normal[j]*a_coeff[i];
     j--;
     if (j == -1) j = 2*mem_count-2;
@@ -183,10 +185,12 @@ void RanCor::init_acoeff() {
   forwardDFT(mem_kernel,N ,FT_mem_kernel);
   FILE * out;
   out=fopen("ft_mem.dat","w");
+  int warn_flag = 0;
   for (int i=0; i< N; i++) {
     fprintf(out,"%d %f %f\n",i,FT_mem_kernel[i].real(),FT_mem_kernel[i].imag());
-    if ( FT_mem_kernel[i].real() < 0 ) {
+    if ( FT_mem_kernel[i].real() < 0 && warn_flag == 0 ) {
       error->warning(FLERR,"Some modes of the memory are < 0 in fix gle. Memory will be corrected. ");
+      warn_flag = 1;
     }
   }
   fclose(out);

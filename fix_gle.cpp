@@ -103,7 +103,7 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   //atom->add_callback(0);
   
   
-  lastindex_v = lastindex_r  = 0;
+  lastindex_v = firstindex_r  = 0;
   int nlocal= atom->nlocal, n, d,m;
   for ( n=0; n<nlocal; n++ )
     for ( d=0; d<3; d++ ) {
@@ -196,7 +196,7 @@ void FixGLE::read_mem_file()
   for(i=0; i<mem_count; i++){
     t_old = t;
     fscanf(mem_file,"%lf %lf\n",&t,&mem);
-    if (abs(t - t_old - update->dt) > 10E-10 && t_old != 0.0) error->all(FLERR,"memory needs resolution similar to timestep");
+    //if (abs(t - t_old - update->dt) > 10E-10 && t_old != 0.0) error->all(FLERR,"memory needs resolution similar to timestep");
     mem_kernel[i] = mem;
   }
   
@@ -244,7 +244,7 @@ void FixGLE::post_force(int vflag)
   for ( n=0; n<nlocal; n++ ) {
     for ( d=0; d<3; d++ ) {
       save_velocity[n][d*mem_count+lastindex_v] = v[n][d];
-      save_random[n][d*(2*mem_count-1)+lastindex_r] = random->gaussian();
+      save_random[n][d*(2*mem_count-1)+firstindex_r] = random->gaussian();
     }
   }
 
@@ -263,9 +263,9 @@ void FixGLE::post_force(int vflag)
       gamma1 = gfactor1[type[n]];
       gamma2 = gfactor2[type[n]] * tsqrt;
 
-      array[n][0] = fran[0] = gamma2*random_correlator->gaussian(&save_random[n][0],lastindex_r);
-      array[n][1] = fran[1] = gamma2*random_correlator->gaussian(&save_random[n][2*mem_count-1],lastindex_r);
-      array[n][2] = fran[2] = gamma2*random_correlator->gaussian(&save_random[n][4*mem_count-2],lastindex_r);
+      array[n][0] = fran[0] = gamma2*random_correlator->gaussian(&save_random[n][0],firstindex_r);
+      array[n][1] = fran[1] = gamma2*random_correlator->gaussian(&save_random[n][2*mem_count-1],firstindex_r);
+      array[n][2] = fran[2] = gamma2*random_correlator->gaussian(&save_random[n][4*mem_count-2],firstindex_r);
 
       double mem_sum;
       int j;
@@ -294,8 +294,8 @@ void FixGLE::post_force(int vflag)
   
   lastindex_v++;
   if (lastindex_v==mem_count) lastindex_v=0;
-  lastindex_r++;
-  if (lastindex_r==2*mem_count-1) lastindex_r=0;
+  firstindex_r++;
+  if (firstindex_r==2*mem_count-1) firstindex_r=0;
 
 }
 

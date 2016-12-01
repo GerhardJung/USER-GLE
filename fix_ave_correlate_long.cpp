@@ -488,7 +488,7 @@ void FixAveCorrelateLong::end_of_step()
     for (unsigned int i=0;i<npcorr;++i) {
       fprintf(fp, "%lg ", t[i]*update->dt);
       for (unsigned int j=0;j<npair;++j) {
-        fprintf(fp, "%lg %lg ", f[j][i],df[j][i]);
+        fprintf(fp, "%.10lg %lg ", f[j][i],df[j][i]);
       }
     fprintf(fp, "\n");
     }

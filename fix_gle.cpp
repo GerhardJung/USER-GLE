@@ -77,6 +77,7 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   seed = force->inumeric(FLERR,arg[7]);
   
   // optional parameter
+  gjfflag=0;
   int restart = 0;
   int iarg = 8;
   while (iarg < narg) {
@@ -138,8 +139,21 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   
   //memory for force save
   nmax = atom->nmax;
-  memory->create(array,nmax,6,"fix_gle:array");
+  if (gjfflag) {
+    memory->create(array,nmax,9,"fix_gle:array");
+  } else {
+    memory->create(array,nmax,6,"fix_gle:array");
+  }
   array_atom = array;
+  
+  // initialize array to zero
+  for (int i = 0; i < nlocal; i++) {
+    for (int k = 0; k < 6; k++) array[i][k] = 0.0;
+    if (gjfflag)
+      for (int k = 6; k < 9; k++) array[i][k] = 0.0;
+  }
+  
+  if (gjfflag) gjffac = 1.0/(1.0+update->dt/2.0/t_period);
 
 }
 
@@ -248,14 +262,6 @@ void FixGLE::post_force(int vflag)
     }
   }
 
-  //prepare array to save force
-  if (atom->nlocal > nmax) {
-    nmax = atom->nmax;
-    memory->destroy(array);
-    memory->create(array,nmax,6,"fix_gle:array");
-    array_atom = array;
-  }
-
   compute_target();
 
   for ( n = 0; n < nlocal; n++) {
@@ -263,10 +269,12 @@ void FixGLE::post_force(int vflag)
       gamma1 = gfactor1[type[n]];
       gamma2 = gfactor2[type[n]] * tsqrt;
 
-      array[n][0] = fran[0] = gamma2*random_correlator->gaussian(&save_random[n][0],firstindex_r);
-      array[n][1] = fran[1] = gamma2*random_correlator->gaussian(&save_random[n][2*mem_count-1],firstindex_r);
-      array[n][2] = fran[2] = gamma2*random_correlator->gaussian(&save_random[n][4*mem_count-2],firstindex_r);
-
+      //random noise
+      fran[0] = gamma2*random_correlator->gaussian(&save_random[n][0],firstindex_r);
+      fran[1] = gamma2*random_correlator->gaussian(&save_random[n][2*mem_count-1],firstindex_r);
+      fran[2] = gamma2*random_correlator->gaussian(&save_random[n][4*mem_count-2],firstindex_r);
+    
+      //drag
       double mem_sum;
       int j;
       for ( d=0; d<3; d++ ) {
@@ -281,12 +289,44 @@ void FixGLE::post_force(int vflag)
 	  if (j < 0) j = mem_count -1;
 	}
 	mem_sum += save_velocity[n][d*mem_count+j]*mem_kernel[mem_count-1];
-	array[n][d+3] = fdrag[d] = gamma1*mem_sum;
+	fdrag[d] = gamma1*mem_sum;
       }
+      
+      
+      if (gjfflag) {
+	double fswap;
+	fswap = 0.5*(fran[0]+array[n][6]);
+	array[n][6] = fran[0];
+	fran[0] = fswap;
+	fswap = 0.5*(fran[1]+array[n][7]);
+	array[n][7] = fran[1];
+	fran[1] = fswap;
+	fswap = 0.5*(fran[2]+array[n][8]);
+	array[n][8] = fran[2];
+	fran[2] = fswap;
 
+	fdrag[0] *= gjffac;
+	fdrag[1] *= gjffac;
+	fdrag[2] *= gjffac;
+	fran[0] *= gjffac;
+	fran[1] *= gjffac;
+	fran[2] *= gjffac;
+	f[n][0] *= gjffac;
+	f[n][1] *= gjffac;
+	f[n][2] *= gjffac;
+      } 
+
+      array[n][0]=fdrag[0];
+      array[n][1]=fdrag[1];
+      array[n][2]=fdrag[2];
+      array[n][3]=fran[0];
+      array[n][4]=fran[1];
+      array[n][5]=fran[2];
+      
       f[n][0] += fdrag[0] + fran[0];
       f[n][1] += fdrag[1] + fran[1];
       f[n][2] += fdrag[2] + fran[2];
+
 
     }
     

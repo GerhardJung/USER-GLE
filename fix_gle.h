@@ -54,6 +54,8 @@ class FixGLE : public Fix {
   
   int flangevin_allocated;
   double t_start,t_period,t_stop,t_target;
+  int gjfflag;
+  double gjffac;
   int mem_count;
   FILE * mem_file;
   double *mem_kernel;

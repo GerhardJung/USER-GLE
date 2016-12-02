@@ -31,7 +31,8 @@ class FixGLE : public Fix {
   int setmask();
   void init();
   void setup(int);
-  virtual void post_force(int);
+  virtual void initial_integrate(int);
+  virtual void final_integrate();
   void reset_target(double);
   void reset_dt();
   int modify_param(int, char **);
@@ -44,18 +45,19 @@ class FixGLE : public Fix {
   int unpack_exchange(int, double *);
 
  protected:
-  double **save_velocity; //used to save peratom velocities
-  double **save_random; //used to save peratom random numbers
-  double **array;
-  int lastindex_v, firstindex_r;
+  double **save_position; //used to save peratom positions
+  double **save_random; //used to save peratom uncorrelated random numbers
+  double **array; //used to save peratom friction/noise (to not calculate it twice) and to access it from lammps
+  int lastindex_p, firstindex_r;
   int nmax;
   int restart;
   double norm;
   
   int flangevin_allocated;
   double t_start,t_period,t_stop,t_target;
-  int gjfflag;
   double gjffac;
+  int force_flag;
+  double mass;
   int mem_count;
   FILE * mem_file;
   double *mem_kernel;

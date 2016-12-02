@@ -77,7 +77,7 @@ void RanCor::init()
     a_coeff[i] = v[i];
   }*/
   
-
+  mem_kernel[0]/=2;
   
   for (i=0; i<mem_count; i++) {
     //mem_kernel[i]*=norm;

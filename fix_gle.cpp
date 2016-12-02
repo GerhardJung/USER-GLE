@@ -67,7 +67,6 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   t_target = t_start;
   tstyle = CONSTANT;
   t_stop = force->numeric(FLERR,arg[4]);
-  t_period=1;
   
   mem_count = force->numeric(FLERR,arg[6]);
   mem_file = fopen(arg[5],"r");
@@ -77,9 +76,9 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   seed = force->inumeric(FLERR,arg[7]);
   
   // optional parameter
-  gjfflag=0;
   int restart = 0;
   int iarg = 8;
+  force_flag = 1;
   while (iarg < narg) {
     if (strcmp(arg[iarg],"restart") == 0) {
       restart = 1;
@@ -87,7 +86,6 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
     }
   }
   
-  if (t_period <= 0.0) error->all(FLERR,"Fix langevin period must be > 0.0");
   if (seed <= 0) error->all(FLERR,"Illegal fix langevin command");
   
   // initialize correlated RNG with processor-unique seed
@@ -97,63 +95,28 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   
   // allocate and init per-atom arrays (velocity and normal random number)
   
-  save_velocity = NULL;
+  save_position = NULL;
   save_random = NULL;
-  comm->maxexchange_fix += 9*mem_count;
+  comm->maxexchange_fix += 6*mem_count;
   grow_arrays(atom->nmax);
   //atom->add_callback(0);
   
   
-  lastindex_v = firstindex_r  = 0;
-  int nlocal= atom->nlocal, n, d,m;
-  for ( n=0; n<nlocal; n++ )
-    for ( d=0; d<3; d++ ) {
-      for ( m=0; m<mem_count; m++ ) {
-	save_velocity[n][d*mem_count+m] = 0.0;
-      }
-      for ( m=0; m<2*mem_count-1; m++ ) {
-	save_random[n][d*(2*mem_count-1)+m] = random->gaussian();
-      }
-    }
-
-  // allocate and init per-type arrays for force prefactors
-  
-  gfactor1 = new double[atom->ntypes+1];
-  gfactor2 = new double[atom->ntypes+1];
-
-  // set temperature = NULL, user can override via fix_modify if wants bias
-
-  id_temp = NULL;
-  temperature = NULL;
-
-  energy = 0.0;
-
-  // flangevin is unallocated until first call to setup()
-  // compute_scalar checks for this and returns 0.0 
-  // if flangevin_allocated is not set
-
-  flangevin = NULL;
-  flangevin_allocated = 0;
-  tforce = NULL;
-  maxatom1 = maxatom2 = 0;
-  
-  //memory for force save
+  lastindex_p = firstindex_r  = 0;
+  int nlocal= atom->nlocal, n,d,m;
   nmax = atom->nmax;
-  if (gjfflag) {
-    memory->create(array,nmax,9,"fix_gle:array");
-  } else {
-    memory->create(array,nmax,6,"fix_gle:array");
-  }
+
+  //memory for force save
+  memory->create(array,nmax,6,"fix_gle:array");
   array_atom = array;
   
   // initialize array to zero
-  for (int i = 0; i < nlocal; i++) {
+  for (int i = 0; i < nlocal; i++)
     for (int k = 0; k < 6; k++) array[i][k] = 0.0;
-    if (gjfflag)
-      for (int k = 6; k < 9; k++) array[i][k] = 0.0;
-  }
-  
-  if (gjfflag) gjffac = 1.0/(1.0+update->dt/2.0/t_period);
+    
+  int *type = atom->type;
+  double *mass = atom->mass;
+  gjffac = 1.0/(1.0+mem_kernel[0]*update->dt/2.0/mass[type[0]]);
 
 }
 
@@ -162,17 +125,13 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
 FixGLE::~FixGLE()
 {
 
-  atom->delete_callback(id,0);
+  //atom->delete_callback(id,0);
   delete random;
   delete random_correlator;
   delete [] mem_kernel;
-  delete [] gfactor1;
-  delete [] gfactor2;
-  delete [] id_temp;
-  memory->destroy(flangevin);
-  memory->destroy(tforce);
   memory->destroy(save_random);
-  memory->destroy(save_velocity);
+  memory->destroy(save_position);
+  memory->destroy(array);
 
 }
 
@@ -181,8 +140,8 @@ FixGLE::~FixGLE()
 int FixGLE::setmask()
 {
   int mask = 0;
-  mask |= POST_FORCE;
-  mask |= THERMO_ENERGY;
+  mask |= INITIAL_INTEGRATE;
+  mask |= FINAL_INTEGRATE;
   return mask;
 }
 
@@ -213,7 +172,6 @@ void FixGLE::read_mem_file()
     //if (abs(t - t_old - update->dt) > 10E-10 && t_old != 0.0) error->all(FLERR,"memory needs resolution similar to timestep");
     mem_kernel[i] = mem;
   }
-  
 }
 
 /* ---------------------------------------------------------------------- */
@@ -221,122 +179,144 @@ void FixGLE::read_mem_file()
 void FixGLE::init()
 {
 
-  // set force prefactors
-
-  if (!atom->rmass) {
-    for (int i = 1; i <= atom->ntypes; i++) {
-      gfactor1[i] = -update->dt;
-      gfactor2[i] = 1;
-    }
-  }
-
+  
 }
 
 /* ---------------------------------------------------------------------- */
 
 void FixGLE::setup(int vflag)
 {
+
+  int nlocal= atom->nlocal, n,d,m;
+  double **x = atom->x;
+  for ( n=0; n<nlocal; n++ )
+    for ( d=0; d<3; d++ ) {
+      for ( m=0; m<=mem_count; m++ ) {
+	save_position[n][d*(mem_count+1)+m] = x[n][d];
+      }
+      for ( m=0; m<2*mem_count-1; m++ ) {
+	save_random[n][d*(2*mem_count-1)+m] = random->gaussian();
+      }
+    }
   
-  post_force(vflag);
+}
+
+/* ---------------------------------------------------------------------- */
+
+void FixGLE::initial_integrate(int vflag)
+{
+  int n,d,m;
+  double **v = atom->v;
+  double **x = atom->x;
+  double **f = atom->f;
+  int *type = atom->type;
+  double *mass = atom->mass;
+  int *mask = atom->mask;
+  int nlocal = atom->nlocal;
+  double fdrag[3],fran[3];
+  
+  // update random numbers
+  for ( n=0; n<nlocal; n++ ) {
+    for ( d=0; d<3; d++ ) {
+      save_random[n][d*(2*mem_count-1)+firstindex_r] = random->gaussian();
+    }
+  }
+
+  for ( n = 0; n < nlocal; n++) {
+    if (mask[n] & groupbit) {
+
+      // calculate correlated noise 
+      fran[0] = array[n][0] = random_correlator->gaussian(&save_random[n][0],firstindex_r);
+      fran[1] = array[n][1] = random_correlator->gaussian(&save_random[n][2*mem_count-1],firstindex_r);
+      fran[2] = array[n][2] = random_correlator->gaussian(&save_random[n][4*mem_count-2],firstindex_r);
+      
+      for (d = 0; d<3;d++) {
+	
+	fdrag[d]=0;
+	int tn1 = lastindex_p;
+	int tn = lastindex_p-1;
+	if (tn < 0) tn = mem_count;
+	
+	for (m = 1; m<mem_count;m++) {
+	  fdrag[d]+=(save_position[n][d*(mem_count+1)+tn1]-save_position[n][d*(mem_count+1)+tn])*mem_kernel[m];
+	  tn1--;
+	  tn--;
+	  if (tn1 < 0) tn1 = mem_count;
+	  if (tn < 0) tn = mem_count;
+	}
+	
+	array[n][3+d]=fdrag[d];
+	
+	x[n][d] += gjffac*update->dt*v[n][d] 
+	+ gjffac*sqrt(update->dt)*update->dt/2.0/mass[type[0]]*fran[d] 
+	- gjffac*update->dt/2.0/mass[type[0]]*fdrag[d];
+	
+      }
+      
+    }
+    
+  }
+
+  
+  firstindex_r++;
+  if (firstindex_r==2*mem_count-1) firstindex_r=0;
+  lastindex_p++;
+  if (lastindex_p==mem_count+1) lastindex_p=0;
 
 }
 
 /* ---------------------------------------------------------------------- */
 
-void FixGLE::post_force(int vflag)
+void FixGLE::final_integrate()
 {
   int n,d,m;
-  double gamma1,gamma2;
   double **v = atom->v;
+  double **x = atom->x;
   double **f = atom->f;
   int *type = atom->type;
+  double *mass = atom->mass;
   int *mask = atom->mask;
   int nlocal = atom->nlocal;
-  double fdrag[3],fran[3];
   
-  // update velocity and random number
+  // update positions numbers
   for ( n=0; n<nlocal; n++ ) {
     for ( d=0; d<3; d++ ) {
-      save_velocity[n][d*mem_count+lastindex_v] = v[n][d];
-      save_random[n][d*(2*mem_count-1)+firstindex_r] = random->gaussian();
+      save_position[n][d*(mem_count+1)+lastindex_p] = x[n][d]; 
     }
   }
-
-  compute_target();
 
   for ( n = 0; n < nlocal; n++) {
     if (mask[n] & groupbit) {
-      gamma1 = gfactor1[type[n]];
-      gamma2 = gfactor2[type[n]] * tsqrt;
-
-      //random noise
-      fran[0] = gamma2*random_correlator->gaussian(&save_random[n][0],firstindex_r);
-      fran[1] = gamma2*random_correlator->gaussian(&save_random[n][2*mem_count-1],firstindex_r);
-      fran[2] = gamma2*random_correlator->gaussian(&save_random[n][4*mem_count-2],firstindex_r);
-    
-      //drag
-      double mem_sum;
-      int j;
-      for ( d=0; d<3; d++ ) {
-	j = lastindex_v;
-	mem_sum = save_velocity[n][d*mem_count+j]*mem_kernel[0]*0.5;
-	j--;
-	if (j < 0) j = mem_count -1;
-	
-	for ( m=1; m<mem_count-1; m++ ) {
-	  mem_sum += save_velocity[n][d*mem_count+j]*mem_kernel[m];
-	  j--;
-	  if (j < 0) j = mem_count -1;
+      for (d = 0; d<3;d++) {
+	int tn = lastindex_p-1;
+	if (tn < 0) tn = mem_count;
+	//array[n][3+d] += (save_position[n][d*(mem_count+1)+lastindex_p]-save_position[n][d*(mem_count+1)+tn])*mem_kernel[0];
+	v[n][d] = 2.0/update->dt*(save_position[n][d*(mem_count+1)+lastindex_p]-save_position[n][d*(mem_count+1)+tn])-v[n][d];
+	  
+	if (force_flag) {
+	  int tn1 = lastindex_p;
+	  double vn1 = v[n][d];
+	  double fdrag = vn1*mem_kernel[m]*update->dt;
+	  double vn = 2.0/update->dt*(save_position[n][d*(mem_count+1)+tn1]-save_position[n][d*(mem_count+1)+tn])-vn1;
+	  for (m = 0; m<mem_count;m++) {
+	    fdrag -= vn1*mem_kernel[m]*update->dt;
+	    vn1 = vn;
+	    tn1 = tn;
+	    tn--;
+	    if (tn < 0) tn = mem_count;
+	    vn = 2.0/update->dt*(save_position[n][d*(mem_count+1)+tn1]-save_position[n][d*(mem_count+1)+tn])-vn1;
+	  }
+	  //array[n][3+d] = fdrag;
+	  array[n][3+d] /= - sqrt(update->dt);
+	  //array[n][d] *= sqrt(update->dt);
+	  f[n][d] += array[n][d] + array[n][d+3];
 	}
-	mem_sum += save_velocity[n][d*mem_count+j]*mem_kernel[mem_count-1];
-	fdrag[d] = gamma1*mem_sum;
       }
-      
-      
-      if (gjfflag) {
-	double fswap;
-	fswap = 0.5*(fran[0]+array[n][6]);
-	array[n][6] = fran[0];
-	fran[0] = fswap;
-	fswap = 0.5*(fran[1]+array[n][7]);
-	array[n][7] = fran[1];
-	fran[1] = fswap;
-	fswap = 0.5*(fran[2]+array[n][8]);
-	array[n][8] = fran[2];
-	fran[2] = fswap;
-
-	fdrag[0] *= gjffac;
-	fdrag[1] *= gjffac;
-	fdrag[2] *= gjffac;
-	fran[0] *= gjffac;
-	fran[1] *= gjffac;
-	fran[2] *= gjffac;
-	f[n][0] *= gjffac;
-	f[n][1] *= gjffac;
-	f[n][2] *= gjffac;
-      } 
-
-      array[n][0]=fdrag[0];
-      array[n][1]=fdrag[1];
-      array[n][2]=fdrag[2];
-      array[n][3]=fran[0];
-      array[n][4]=fran[1];
-      array[n][5]=fran[2];
-      
-      f[n][0] += fdrag[0] + fran[0];
-      f[n][1] += fdrag[1] + fran[1];
-      f[n][2] += fdrag[2] + fran[2];
-
-
     }
-    
   }
   
-  lastindex_v++;
-  if (lastindex_v==mem_count) lastindex_v=0;
-  firstindex_r++;
-  if (firstindex_r==2*mem_count-1) firstindex_r=0;
-
+  
+  
 }
 
 /* ----------------------------------------------------------------------
@@ -438,8 +418,9 @@ double FixGLE::memory_usage() {
 
 void FixGLE::grow_arrays(int nmax) {
   
-  memory->grow(save_velocity,nmax,3*mem_count,"fix/gle:save_velocity");
+  memory->grow(save_position,nmax,3*(mem_count+1),"fix/gle:save_position");
   memory->grow(save_random,nmax,6*mem_count-3,"fix/gle:save_random");
+
 }
 
 /* ----------------------------------------------------------------------
@@ -461,8 +442,8 @@ int FixGLE::pack_exchange(int i, double *buf)
   int d,m;
   // pack velocity
   for ( d=0; d<3; d++ ) { 
-    for ( m=0; m<mem_count; m++ ) {
-      buf[offset++] = save_velocity[i][d*mem_count+m];
+    for ( m=0; m<mem_count+1; m++ ) {
+      buf[offset++] = save_position[i][d*(mem_count+1)+m];
     }
   }
   
@@ -487,7 +468,7 @@ int FixGLE::unpack_exchange(int nlocal, double *buf)
   // pack velocity
   for ( d=0; d<3; d++ ) { 
     for ( m=0; m<mem_count; m++ ) {
-      save_velocity[nlocal][d*mem_count+m] = buf[offset++];
+      save_position[nlocal][d*(mem_count+1)+m] = buf[offset++];
     }
   }
   

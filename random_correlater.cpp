@@ -55,7 +55,7 @@ void RanCor::init()
   int i_incr = 0;
   double norm = mem_kernel[i_incr];
   for (int i=0; i<mem_count; i++) {
-    mem_kernel[i] =  norm*exp(-19.30*i*update->dt)*cos(28.25*i*update->dt) ;
+    //mem_kernel[i] =  norm*exp(-19.30*i*update->dt)*cos(28.25*i*update->dt) ;
     //if (i >= i_incr) mem_kernel[i] = mem_kernel[i]/2 +  norm/2*exp(-9.30*(i-i_incr)*0.005);
   }
   
@@ -80,7 +80,7 @@ void RanCor::init()
   mem_kernel[0]/=2;
   
   for (i=0; i<mem_count; i++) {
-    //mem_kernel[i]*=norm;
+    mem_kernel[i]*=update->dt;
   }
   for (i=0; i<2*mem_count-1; i++) {
     //a_coeff[i]*=sqrt(norm);

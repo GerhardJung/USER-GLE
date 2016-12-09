@@ -97,7 +97,7 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   
   save_position = NULL;
   save_random = NULL;
-  comm->maxexchange_fix += 6*mem_count;
+  comm->maxexchange_fix += 9*mem_count;
   grow_arrays(atom->nmax);
   //atom->add_callback(0);
   
@@ -107,16 +107,17 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   nmax = atom->nmax;
 
   //memory for force save
-  memory->create(array,nmax,6,"fix_gle:array");
+  memory->create(array,nmax,9,"fix_gle:array");
   array_atom = array;
   
   // initialize array to zero
   for (int i = 0; i < nlocal; i++)
-    for (int k = 0; k < 6; k++) array[i][k] = 0.0;
+    for (int k = 0; k < 9; k++) array[i][k] = 0.0;
     
   int *type = atom->type;
   double *mass = atom->mass;
   gjffac = 1.0/(1.0+mem_kernel[0]*update->dt/2.0/mass[type[0]]);
+  gjffac2 = (1.0-mem_kernel[0]*update->dt/2.0/mass[type[0]])/gjffac;
 
 }
 
@@ -186,6 +187,8 @@ void FixGLE::init()
 
 void FixGLE::setup(int vflag)
 {
+  
+    double **f = atom->f;
 
   int nlocal= atom->nlocal, n,d,m;
   double **x = atom->x;
@@ -197,7 +200,10 @@ void FixGLE::setup(int vflag)
       for ( m=0; m<2*mem_count-1; m++ ) {
 	save_random[n][d*(2*mem_count-1)+m] = random->gaussian();
       }
+      
+      array[n][d]=f[n][d];
     }
+  
   
 }
 
@@ -226,9 +232,9 @@ void FixGLE::initial_integrate(int vflag)
     if (mask[n] & groupbit) {
 
       // calculate correlated noise 
-      fran[0] = array[n][0] = random_correlator->gaussian(&save_random[n][0],firstindex_r);
-      fran[1] = array[n][1] = random_correlator->gaussian(&save_random[n][2*mem_count-1],firstindex_r);
-      fran[2] = array[n][2] = random_correlator->gaussian(&save_random[n][4*mem_count-2],firstindex_r);
+      fran[0] = array[n][6] = random_correlator->gaussian(&save_random[n][0],firstindex_r);
+      fran[1] = array[n][7] = random_correlator->gaussian(&save_random[n][2*mem_count-1],firstindex_r);
+      fran[2] = array[n][8] = random_correlator->gaussian(&save_random[n][4*mem_count-2],firstindex_r);
       
       for (d = 0; d<3;d++) {
 	
@@ -246,10 +252,11 @@ void FixGLE::initial_integrate(int vflag)
 	}
 	
 	array[n][3+d]=fdrag[d];
-	
+
 	x[n][d] += gjffac*update->dt*v[n][d] 
-	+ gjffac*sqrt(update->dt)*update->dt/2.0/mass[type[0]]*fran[d] 
-	- gjffac*update->dt/2.0/mass[type[0]]*fdrag[d];
+	+ gjffac*update->dt*update->dt/2.0/mass[type[0]]*array[n][d]
+	- gjffac*update->dt/2.0/mass[type[0]]*array[n][d+3]
+	+ gjffac*update->dt*update->dt/2.0/mass[type[0]]*array[n][d+6];
 	
       }
       
@@ -290,26 +297,18 @@ void FixGLE::final_integrate()
       for (d = 0; d<3;d++) {
 	int tn = lastindex_p-1;
 	if (tn < 0) tn = mem_count;
-	//array[n][3+d] += (save_position[n][d*(mem_count+1)+lastindex_p]-save_position[n][d*(mem_count+1)+tn])*mem_kernel[0];
-	v[n][d] = 2.0/update->dt*(save_position[n][d*(mem_count+1)+lastindex_p]-save_position[n][d*(mem_count+1)+tn])-v[n][d];
-	  
+	array[n][3+d] += (save_position[n][d*(mem_count+1)+lastindex_p]-save_position[n][d*(mem_count+1)+tn])*mem_kernel[0];
+	v[n][d] =  gjffac2*v[n][d] 
+	+ update->dt/2.0/mass[type[0]]*(gjffac2*array[n][d]+f[n][d]) 
+	- gjffac/mass[type[0]]*array[n][d+3]
+	+ update->dt*gjffac/mass[type[0]]*array[n][d+6];
+	
+	array[n][d]=f[n][d];
+	
 	if (force_flag) {
-	  int tn1 = lastindex_p;
-	  double vn1 = v[n][d];
-	  double fdrag = vn1*mem_kernel[m]*update->dt;
-	  double vn = 2.0/update->dt*(save_position[n][d*(mem_count+1)+tn1]-save_position[n][d*(mem_count+1)+tn])-vn1;
-	  for (m = 0; m<mem_count;m++) {
-	    fdrag -= vn1*mem_kernel[m]*update->dt;
-	    vn1 = vn;
-	    tn1 = tn;
-	    tn--;
-	    if (tn < 0) tn = mem_count;
-	    vn = 2.0/update->dt*(save_position[n][d*(mem_count+1)+tn1]-save_position[n][d*(mem_count+1)+tn])-vn1;
-	  }
-	  //array[n][3+d] = fdrag;
-	  array[n][3+d] /= - sqrt(update->dt);
-	  //array[n][d] *= sqrt(update->dt);
-	  f[n][d] += array[n][d] + array[n][d+3];
+	  array[n][3+d] /= - update->dt;
+	  //if (d==0) printf("fc %f fd %f fr %f\n",f[n][d],array[n][d+3], array[n][d+6] );
+	  f[n][d] += array[n][d+3] + array[n][d+6];
 	}
       }
     }

@@ -1329,7 +1329,7 @@ void FixAveCorrelatePeratom::end_of_step()
     }
     if (save_count[i]) {
       for (j = 0; j < npair; j++)
-        fprintf(fp," %g %g",prefactor*save_corr[i][j]/save_count[i],prefactor*save_corr_err[i][j]/save_count[i]);
+        fprintf(fp," %.15lg %g",prefactor*save_corr[i][j]/save_count[i],prefactor*save_corr_err[i][j]/save_count[i]);
     } else {
       for (j = 0; j < npair; j++)
         fprintf(fp," 0.0 0.0");
@@ -1340,7 +1340,7 @@ void FixAveCorrelatePeratom::end_of_step()
         fprintf(fp," %lf",save_count[offset]);
       if (save_count[offset]) {
         for (j = 0; j < npair; j++)
-          fprintf(fp," %g %g",prefactor*save_corr[offset][j]/save_count[offset],prefactor*save_corr_err[offset][j]/save_count[offset]);
+          fprintf(fp," %.15lg %g",prefactor*save_corr[offset][j]/save_count[offset],prefactor*save_corr_err[offset][j]/save_count[offset]);
       } else {
         for (j = 0; j < npair; j++)
           fprintf(fp," 0.0");

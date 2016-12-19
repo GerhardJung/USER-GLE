@@ -114,6 +114,10 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   for (int i = 0; i < nlocal; i++)
     for (int k = 0; k < 9; k++) array[i][k] = 0.0;
     
+  memory->create(fran_old,nmax,3,"fix/gle:fran_old");
+  for (int i = 0; i < nlocal; i++)
+    for (int k = 0; k < 3; k++) fran_old[i][k] = 0.0;
+    
   int *type = atom->type;
   double *mass = atom->mass;
   gjffac = 1.0/(1.0+mem_kernel[0]*update->dt/2.0/mass[type[0]]);
@@ -130,6 +134,7 @@ FixGLE::~FixGLE()
   delete random;
   delete random_correlator;
   delete [] mem_kernel;
+  delete [] fran_old;
   memory->destroy(save_random);
   memory->destroy(save_position);
   memory->destroy(array);
@@ -256,7 +261,7 @@ void FixGLE::initial_integrate(int vflag)
 	x[n][d] += gjffac*update->dt*v[n][d] 
 	+ gjffac*update->dt*update->dt/2.0/mass[type[0]]*array[n][d]
 	- gjffac*update->dt/2.0/mass[type[0]]*array[n][d+3]
-	+ gjffac*update->dt*update->dt/2.0/mass[type[0]]*array[n][d+6];
+	+ gjffac*update->dt*update->dt/2.0/mass[type[0]]*(array[n][d+6]);
 	
       }
       
@@ -301,9 +306,10 @@ void FixGLE::final_integrate()
 	v[n][d] =  gjffac2*v[n][d] 
 	+ update->dt/2.0/mass[type[0]]*(gjffac2*array[n][d]+f[n][d]) 
 	- gjffac/mass[type[0]]*array[n][d+3]
-	+ update->dt*gjffac/mass[type[0]]*array[n][d+6];
+	+ update->dt*gjffac/mass[type[0]]/1.0*(array[n][d+6]);
 	
 	array[n][d]=f[n][d];
+	fran_old[n][d]=array[n][d+6];
 	
 	if (force_flag) {
 	  array[n][3+d] /= - update->dt;

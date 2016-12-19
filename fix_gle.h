@@ -61,6 +61,7 @@ class FixGLE : public Fix {
   int mem_count;
   FILE * mem_file;
   double *mem_kernel;
+  double **fran_old;
   double mem_dt;
   double *gfactor1,*gfactor2;
   double energy,energy_onestep;

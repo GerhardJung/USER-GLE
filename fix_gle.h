@@ -55,12 +55,14 @@ class FixGLE : public Fix {
   
   int flangevin_allocated;
   double t_start,t_period,t_stop,t_target;
+  double dt_gle;
   double gjffac, gjffac2;
   int force_flag;
   double mass;
   int mem_count;
   FILE * mem_file;
   double *mem_kernel;
+  double *cor_kernel;
   double **fran_old;
   double mem_dt;
   double *gfactor1,*gfactor2;
@@ -83,6 +85,7 @@ class FixGLE : public Fix {
 
   void compute_target();
   void read_mem_file();
+  void init_cor_kernel();
 };
 
 }

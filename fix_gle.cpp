@@ -69,6 +69,12 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   t_stop = force->numeric(FLERR,arg[4]);
   
   mem_count = force->numeric(FLERR,arg[6]);
+  mem_file = fopen(arg[5],"r");
+  mem_kernel = new double[mem_count];
+  read_mem_file();
+  for (int i=0; i<mem_count; i++) {
+    mem_kernel[i]*=update->dt;
+  }
   
   seed = force->inumeric(FLERR,arg[7]);
   
@@ -85,20 +91,15 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   
   if (seed <= 0) error->all(FLERR,"Illegal fix langevin command");
   
-  // read mem file
-  mem_file = fopen(arg[5],"r");
-  if (mem_file == NULL) error->all(FLERR,"Could not open fix_gle:mem_file");
-  mem_kernel = new double[10000];
-  read_mem_file();
-  
   // initialize correlated RNG with processor-unique seed
-  cor_kernel = new double[10000];
-  init_cor_kernel();
   random = new RanMars(lmp,seed + comm->me);
   precision = 0.000002;
-  random_correlator = new RanCor(lmp,mem_count, cor_kernel, precision);
+  random_correlator = new RanCor(lmp,mem_count, mem_kernel, precision);
+  
+    mem_kernel[0]/=2;
   
   // allocate and init per-atom arrays (velocity and normal random number)
+  
   save_position = NULL;
   save_random = NULL;
   comm->maxexchange_fix += 9*mem_count;
@@ -124,10 +125,8 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
     
   int *type = atom->type;
   double *mass = atom->mass;
-
-  
   gjffac = 1.0/(1.0+mem_kernel[0]*update->dt/2.0/mass[type[0]]);
-  gjffac2 = (1.0-mem_kernel[0]*update->dt/2.0/mass[type[0]])/gjffac;
+  gjffac2 = (1.0-mem_kernel[0]*update->dt/2.0/mass[type[0]])*gjffac;
 
 }
 
@@ -140,7 +139,6 @@ FixGLE::~FixGLE()
   delete random;
   delete random_correlator;
   delete [] mem_kernel;
-  delete [] cor_kernel;
   delete [] fran_old;
   memory->destroy(save_random);
   memory->destroy(save_position);
@@ -163,7 +161,7 @@ int FixGLE::setmask()
 
 void FixGLE::read_mem_file()
 {
-  // 1st: skip first lines starting with #
+  // skip first lines starting with #
   char buf[0x1000];
   long filepos;
   filepos = ftell(mem_file);
@@ -175,73 +173,16 @@ void FixGLE::read_mem_file()
     filepos = ftell(mem_file);
   } 
   
-  // 2nd: read memory
-  int i,mem_done=0,count=0;
+  //read memory
+  int i;
   double t,t_old, mem;
   t = t_old = mem = 0.0;
-  dt_gle = 0.0;
-  
-  do {
+  for(i=0; i<mem_count; i++){
     t_old = t;
     fscanf(mem_file,"%lf %lf\n",&t,&mem);
-    dt_gle = t - t_old;
-    mem_kernel[count] = mem;
-    count++;
-    if ( ( (int) (update->dt/dt_gle*mem_count+0.5) <= count && count > 1) ) mem_done = 1;
-  } while (mem_done == 0);
-}
-
-/* ---------------------------------------------------------------------- */
-
-void FixGLE::init_cor_kernel()
-{
-  int i;
-  // 1st: calculate double integral of mem_kernel
-  FILE * out;
-  out=fopen("double_integral.dat","w");
-  int full_mem_count = (int) (update->dt/dt_gle*mem_count+0.5);
-  printf("cg_level=%d\n",full_mem_count);
-  int cg_level = (int) (update->dt/dt_gle + 0.5);
-  double cor_kernel_temp[full_mem_count];
-  printf("cg_level=%d\n",cg_level);
-  // first integration
-  cor_kernel_temp[0] = 0;
-  for (i=1; i<full_mem_count; i++) {
-    cor_kernel_temp[i] = cor_kernel_temp[i-1] + dt_gle/2.0*(mem_kernel[i-1]+mem_kernel[i]);
+    //if (abs(t - t_old - update->dt) > 10E-10 && t_old != 0.0) error->all(FLERR,"memory needs resolution similar to timestep");
+    mem_kernel[i] = mem;
   }
-  // second integration
-  cor_kernel[0] = 0;
-  fprintf(out,"%d %f %f\n",0,mem_kernel[0],cor_kernel[0]);
-  for (i=1; i<full_mem_count; i++) {
-    cor_kernel[i] = cor_kernel[i-1] + dt_gle/2.0*(cor_kernel_temp[i-1]+cor_kernel_temp[i]);
-    fprintf(out,"%d %f %f\n",i,mem_kernel[i],cor_kernel[i]);
-  }
-  fclose(out);
-  
-  // 2nd: coarse-grain both the memory function and the integrated random number correlations function
-  out=fopen("cg.dat","w");
-  for (i=0; i<mem_count-1; i++) {
-    mem_kernel[i] = mem_kernel[i*cg_level];
-    double left,right;
-    if (cg_level*(i-1) >= 0) left = cor_kernel[cg_level*(i-1)];
-    else left = 0;
-    if (cg_level*(i+1) < full_mem_count) right = cor_kernel[cg_level*(i+1)];
-    else right = cor_kernel[cg_level*i];
-    cor_kernel_temp[i] = left - 2*cor_kernel[cg_level*i] + right;
-  }
-  mem_kernel[mem_count-1]= mem_kernel[(mem_count-1)*cg_level];
-  cor_kernel_temp[mem_count-1] = cor_kernel_temp[mem_count-2];
-  mem_kernel[0]/=2;
-  for (int i=0; i<mem_count; i++) {
-    mem_kernel[i]*=update->dt;
-  }
-  //cor_kernel_temp[1]+=100*update->dt*update->dt;
-  for (i=0; i<mem_count; i++) {
-    cor_kernel[i] = cor_kernel_temp[i];
-    cor_kernel[i] = mem_kernel[i]*update->dt;
-    fprintf(out,"%d %.10f %.10f\n",i,mem_kernel[i],cor_kernel[i]/update->dt);
-  }
-  fclose(out);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -301,9 +242,9 @@ void FixGLE::initial_integrate(int vflag)
     if (mask[n] & groupbit) {
 
       // calculate correlated noise 
-      fran[0] = array[n][6] = random_correlator->gaussian(&save_random[n][0],firstindex_r);
-      fran[1] = array[n][7] = random_correlator->gaussian(&save_random[n][2*mem_count-1],firstindex_r);
-      fran[2] = array[n][8] = random_correlator->gaussian(&save_random[n][4*mem_count-2],firstindex_r);
+      fran[0] = array[n][6] = sqrt(update->dt)*random_correlator->gaussian(&save_random[n][0],firstindex_r);
+      fran[1] = array[n][7] = sqrt(update->dt)*random_correlator->gaussian(&save_random[n][2*mem_count-1],firstindex_r);
+      fran[2] = array[n][8] = sqrt(update->dt)*random_correlator->gaussian(&save_random[n][4*mem_count-2],firstindex_r);
       
       for (d = 0; d<3;d++) {
 	
@@ -325,7 +266,7 @@ void FixGLE::initial_integrate(int vflag)
 	x[n][d] += gjffac*update->dt*v[n][d] 
 	+ gjffac*update->dt*update->dt/2.0/mass[type[0]]*array[n][d]
 	- gjffac*update->dt/2.0/mass[type[0]]*array[n][d+3]
-	+ gjffac*update->dt*gjffac/2.0/mass[type[0]]*(array[n][d+6]);
+	+ gjffac*update->dt/2.0/mass[type[0]]*(array[n][d+6]);
 	
       }
       
@@ -366,9 +307,8 @@ void FixGLE::final_integrate()
       for (d = 0; d<3;d++) {
 	int tn = lastindex_p-1;
 	if (tn < 0) tn = mem_count;
-	array[n][3+d] += (save_position[n][d*(mem_count+1)+lastindex_p]-save_position[n][d*(mem_count+1)+tn])*mem_kernel[0];
 	v[n][d] =  gjffac2*v[n][d] 
-	+ update->dt/2.0/mass[type[0]]*(gjffac2*array[n][d]+f[n][d]) 
+	+ update->dt/2.0/mass[type[0]]*(gjffac2*array[n][d]+f[n][d])
 	- gjffac/mass[type[0]]*array[n][d+3]
 	+ gjffac/mass[type[0]]*(array[n][d+6]);
 	
@@ -378,7 +318,7 @@ void FixGLE::final_integrate()
 	if (force_flag) {
 	  array[n][3+d] /= - update->dt;
 	  //if (d==0) printf("fc %f fd %f fr %f\n",f[n][d],array[n][d+3], array[n][d+6] );
-	  f[n][d] += array[n][d+3] + array[n][d+6]/update->dt;
+	  f[n][d] += array[n][d+3] + array[n][d+6];
 	}
       }
     }

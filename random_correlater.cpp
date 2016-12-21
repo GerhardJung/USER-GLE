@@ -1,13 +1,12 @@
+
 /* ----------------------------------------------------------------------
    LAMMPS - Large-scale Atomic/Molecular Massively Parallel Simulator
    http://lammps.sandia.gov, Sandia National Laboratories
    Steve Plimpton, sjplimp@sandia.gov
-
    Copyright (2003) Sandia Corporation.  Under the terms of Contract
    DE-AC04-94AL85000 with Sandia Corporation, the U.S. Government retains
    certain rights in this software.  This software is distributed under
    the GNU General Public License.
-
    See the README file in the top-level LAMMPS directory.
 ------------------------------------------------------------------------- */
 
@@ -52,6 +51,12 @@ void RanCor::init()
   
 #ifndef PRONY
   // rescale memory (for optimizer)
+  int i_incr = 0;
+  double norm = mem_kernel[i_incr];
+  for (int i=0; i<mem_count; i++) {
+    //mem_kernel[i] =  norm*exp(-19.30*i*update->dt)*cos(28.25*i*update->dt) ;
+    //if (i >= i_incr) mem_kernel[i] = mem_kernel[i]/2 +  norm/2*exp(-9.30*(i-i_incr)*0.005);
+  }
   
   // init coeff by fourier transformation
   init_acoeff();
@@ -62,7 +67,6 @@ void RanCor::init()
   // request a simplex to start with
   Vector v(a_coeff,2*mem_count-1);
   init_opt(opt,v,2*mem_count-1);
-
   // optimize
   v = opt.step(v, min_function(v,2*mem_count-1));
   printf("optimizer quality: %f\n",min_function(v,2*mem_count-1)); 
@@ -71,7 +75,9 @@ void RanCor::init()
     a_coeff[i] = v[i];
   }*/
   
-
+  for (i=0; i<2*mem_count-1; i++) {
+    //a_coeff[i]*=sqrt(norm);
+  }
 #else //Prony-Series
   double *mem_save = new double[mem_count]; 
   double norm = mem_kernel[0];
@@ -265,7 +271,6 @@ void RanCor::init_opt(NelderMeadOptimizer &opt, Vector v, int dim_cos, int dim_t
     loc_sum -= mem_kernel[n];   
     sum += loc_sum*loc_sum;
   }
-
   return sum;
 }*/
 double RanCor::min_function(Vector v, int dim_cos, int dim_tot) {
@@ -316,4 +321,3 @@ void RanCor::inverseDFT(complex<double> *data, int N, double *result, double *re
     result_imag[n+mem_count-1] /= N;
   } 
 }
-

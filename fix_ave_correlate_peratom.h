@@ -79,10 +79,12 @@ class FixAveCorrelatePeratom : public Fix {
   char *title1,*title2,*title3;
   long filepos;
   
-  int mean_flag;
+  int mean_flag, mean_it_flag;
   FILE *mean_file;
+  FILE *mean_it_file;
   double *mean_count;
   double *mean;
+  double *mean_it_data;
   long mean_filepos;
 
   int lastindex;       // index in values ring of latest time sample

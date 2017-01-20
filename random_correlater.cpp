@@ -51,11 +51,9 @@ void RanCor::init()
   
 #ifndef PRONY
   // rescale memory (for optimizer)
-  int i_incr = 0;
-  double norm = mem_kernel[i_incr];
+  double norm = mem_kernel[0];
   for (int i=0; i<mem_count; i++) {
-    //mem_kernel[i] =  norm*exp(-19.30*i*update->dt)*cos(28.25*i*update->dt) ;
-    //if (i >= i_incr) mem_kernel[i] = mem_kernel[i]/2 +  norm/2*exp(-9.30*(i-i_incr)*0.005);
+    mem_kernel[i] =  norm*exp(-19.30*i*update->dt)*cos(28.25*i*update->dt) ;
   }
   
   // init coeff by fourier transformation

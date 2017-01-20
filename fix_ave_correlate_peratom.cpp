@@ -129,6 +129,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   factor = 1;
   mean_file = NULL;
   mean_flag = 0;
+  mean_it_flag = 0;
   variable_nvalues = 0;
   overwrite = 0;
   v_counter = 0;
@@ -190,7 +191,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
     variable_flag = DIST_DEPENDENED;
     variable_nvalues = 3;
       } else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
-      range = force->inumeric(FLERR,arg[iarg+2]);
+      range = force->numeric(FLERR,arg[iarg+2]);
       bins = force->inumeric(FLERR,arg[iarg+3]);
       iarg += 4;
     } else if (strcmp(arg[iarg],"dynamics") == 0) {
@@ -287,6 +288,16 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
       }
       mean_flag = 1;
       iarg += 2;
+      if (strcmp(arg[iarg],"mean_iterative") == 0) {
+	mean_it_flag = 1;
+	mean_it_file = fopen(arg[iarg+1],"r");
+	if (mean_it_file == NULL) {
+          char str[128];
+          sprintf(str,"Cannot open fix ave/correlate/peratom file %s",arg[iarg+1]);
+          error->one(FLERR,str);
+        }
+        iarg += 2;
+      }
     } else if (strcmp(arg[iarg],"title1") == 0) {
       if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       delete [] title1;
@@ -492,9 +503,33 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
 
     for(o = 0; o < bins; o++){
       for (i = 0; i < nvalues; i++) {
-    mean[i+o*nvalues]=0.0;
+	mean[i+o*nvalues]=0.0;
       }
       mean_count[o]=0.0;
+    }
+    
+    if (mean_it_flag) {
+      memory->create(mean_it_data,bins,"ave/correlate/peratom:mean_it_data");
+      // read mean_file
+      // skip first lines starting with #
+      char buf[0x1000];
+      long filepos;
+      filepos = ftell(mean_it_file);
+      while (fgets(buf, sizeof(buf), mean_it_file) != NULL) {
+	if (buf[0] != '#') {
+	  fseek(mean_it_file,filepos,SEEK_SET);
+	  break;
+	}
+	filepos = ftell(mean_it_file);
+      } 
+  
+      //read memory
+      int r;
+      double dist, mean_data;
+      for(r=0; r<bins; r++){
+	fscanf(mean_it_file,"%lf %lf\n",&dist,&mean_data);
+	mean_it_data[r] = mean_data;
+      }
     }
   }
 
@@ -1131,7 +1166,7 @@ void FixAveCorrelatePeratom::end_of_step()
       } else if (variable_flag == DIST_DEPENDENED) {
 	for (r = 0; r < 3 ; r++) {
 	  variable_store[a][lastindex+r*nsave] = group_data[a][nvalues+include_orthogonal+r];
-	  variable_store[a][lastindex+r*nsave] /= counter_glo[a];
+	  if (memory_switch==GROUP) variable_store[a][lastindex+r*nsave] /= counter_glo[a];
 	}
       }
     }
@@ -1278,11 +1313,13 @@ void FixAveCorrelatePeratom::end_of_step()
       time_calc += t2 - t1;
     }
 
-
+  t1 = MPI_Wtime();
     //calculate mean
     if (mean_flag){
       calc_mean(indices_group, ngroup_loc);
     }
+    t2 = MPI_Wtime();
+    time_calc_mean += t2 - t1;
 
   double tt2 = MPI_Wtime();
   time_total += tt2-tt1;
@@ -1411,14 +1448,14 @@ void FixAveCorrelatePeratom::end_of_step()
  
 
   // print timing
-  //printf("processor %d: time(init_compute) = %f\n",me,time_init_compute);
-  //printf("processor %d: time(calc+write_nvalues) = %f\n",me,calc_write_nvalues);
-  //printf("processor %d: time(write_var) = %f\n",me,write_var);
-  //printf("processor %d: time(write_orthogonal) = %f\n",me,write_orthogonal);
-  //printf("processor %d: time(reduce_write_global) = %f\n",me,reduce_write_global);
-  //printf("processor %d: time(calc) = %f\n",me,time_calc);
-  //printf("processor %d: time(red_calc) = %f\n",me,time_red_calc);
-  //printf("processor %d: time(total) = %f\n",me,time_total);
+  printf("processor %d: time(init_compute) = %f\n",me,time_init_compute);
+  printf("processor %d: time(calc+write_nvalues) = %f\n",me,calc_write_nvalues);
+  printf("processor %d: time(write_var) = %f\n",me,write_var);
+  printf("processor %d: time(write_orthogonal) = %f\n",me,write_orthogonal);
+  printf("processor %d: time(reduce_write_global) = %f\n",me,reduce_write_global);
+  printf("processor %d: time(calc) = %f\n",me,time_calc);
+  printf("processor %d: time(red_calc) = %f\n",me,time_calc_mean);
+  printf("processor %d: time(total) = %f\n",me,time_total);
 }
 
 /* ----------------------------------------------------------------------
@@ -1427,9 +1464,14 @@ void FixAveCorrelatePeratom::end_of_step()
 void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 {
   int a,b,i,j,k,o,m,n,ipair;
+  int ind,offset;
   int t = nsample - nsave;
   int nlocal= atom->nlocal;
   tagint *tag = atom->tag;
+  
+  double delx, dely, delz, delfx, delfy, delfz;
+  double rsq, dist, frp;
+  double delfx_p, delfy_p, delfz_p;
 
   //calculate work distribution
   int sample_start = 0,
@@ -1483,7 +1525,7 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 	double ngroup_lower = a;
 	double ngroup_upper = a+1;
 	if (type == CROSS || type == AUTOCROSS){
-	  ngroup_lower = 0;
+	  ngroup_lower = a;
 	  ngroup_upper = ngroup_glo;
 	}
 	for (b = ngroup_lower; b < ngroup_upper; b++) {
@@ -1508,8 +1550,8 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 		double dV = variable_store[inda][m] - variable_store[indb][n];
 		dV=fabs(dV);
 		if(dV<range){
-		  int ind = dV/range*bins;
-		  int offset= k*bins+ind;
+		  ind = dV/range*bins;
+		  offset= k*bins+ind;
 		  double val0 = array[indb][j * nsave + n];
 		  double valt = array[inda][i * nsave + m];
 		  double cor = val0*valt;
@@ -1526,38 +1568,29 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 		  }
 		}
 	      } else if (variable_flag == DIST_DEPENDENED) {
-		double *dr = new double[3];
-		dr[0] = variable_store[indb][n]-variable_store[inda][m]  ;
-		dr[1] = variable_store[indb][n+nsave]-variable_store[inda][m+nsave]  ;
-		dr[2] =  variable_store[indb][n+2*nsave]-variable_store[inda][m+2*nsave];
-		domain->minimum_image(dr[0],dr[1],dr[2]);
-		double dV = sqrt( dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2]);
-		if(dV<range){
-		  double *res_data = new double[8];
-		  double *inp_data = new double[6];
-		  int p;
-		  for (p=0; p<3; p++) inp_data[p] = array[inda][ (i+p) * nsave + m];
-		  for (p=0; p<3; p++) inp_data[p+3] = array[indb][ (j+p) * nsave + n];
-		  // calculate radial component of the forces (mapped on the distance vector)
-		  decompose(res_data,dr,inp_data);
-		  int ind = dV/range*bins;
+		delx = variable_store[indb][n]-variable_store[inda][m]  ;
+		dely = variable_store[indb][n+nsave]-variable_store[inda][m+nsave]  ;
+		delz =  variable_store[indb][n+2*nsave]-variable_store[inda][m+2*nsave];
+		domain->minimum_image(delx,dely,delz);
+		rsq = delx*delx + dely*dely + delz*delz;
+		dist = sqrt (rsq);
+		if(dist<range){
+		  delfx = array[indb][ j*nsave + n] - array[inda][ i*nsave + m];
+		  delfy = array[indb][ j*nsave + nsave + n] - array[inda][ i*nsave + nsave + m];
+		  delfz = array[indb][ j*nsave + 2*nsave + n] - array[inda][ i*nsave + 2*nsave + m];
+		  // calculate radial component of the forces/velocities (mapped on the distance vector)
+		  frp = (delfx*delx + delfy*dely +delfz*delz) / dist;
+		  //delfx_p = frp * delx / rsq;
+		  //delfy_p = frp * dely / rsq;
+		  //delfz_p = frp * delz / rsq;
 		  
-		  int offset= k*bins+ind;
-		  double val0 = res_data[1];
-		  double valt = res_data[0];
-		  double cor = val0*valt;
+		  ind = dist/range*bins;
+		  offset= k*bins+ind;
+		  
 		  if(i==0&&j==0) local_count[offset]+=1.0;
-		  local_corr[offset][ipair] += cor;
-		  local_corr_err[offset][ipair] += cor*cor;
-		  // angular component
-		  if(i==0&&j==0) local_count[offset+corr_length/2]+=1.0;
-		  cor = res_data[2]*res_data[5]+res_data[3]*res_data[6]+res_data[4]*res_data[7];
-		  local_corr[offset+corr_length/2][ipair] += cor;
-		  local_corr_err[offset+corr_length/2][ipair] += cor*cor;
-		  delete[] res_data;
-		  delete[] inp_data;
+		  local_corr[offset][ipair] += frp;
+		  local_corr_err[offset][ipair] += frp*frp;
 		}
-		delete[] dr;
 	      } else { //no variable dependency
 		double val0 = array[indb][j * nsave + n];
 		double valt = array[inda][i * nsave + m];
@@ -1581,8 +1614,8 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 		double dV = variable_store[inda][m] - variable_store[indb][n];
 		dV=fabs(dV);
 		if(dV<range){
-		  int ind = dV/range*bins;
-		  int offset= t*bins+ind;
+		  ind = dV/range*bins;
+		  offset= t*bins+ind;
 		  double val0 = array[indb][(j+nvalues+6)*nsave+k];
 		  double valt = array[inda][i*nsave+m];
 		  double cor = val0*valt;
@@ -1612,8 +1645,8 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 		  for (p=0; p<3; p++) inp_data[p+3] = array[indb][(j+p+nvalues+6)*nsave+k];
 		  decompose(res_data,dr,inp_data);
 		  // calculate radial component of the forces (mapped on the distance vector)
-		  int ind = dV/range*bins;
-		  int offset= t*bins+ind;
+		  ind = dV/range*bins;
+		  offset= t*bins+ind;
 		  double val0 = res_data[1];
 		  double valt = res_data[0];
 		  double cor = val0*valt;
@@ -1689,6 +1722,12 @@ void FixAveCorrelatePeratom::decompose(double *res_data, double *dr, double *inp
 void FixAveCorrelatePeratom::calc_mean(int *indices_group, int ngroup_loc){
   int a,b,i,o,k;
   tagint *tag = atom->tag;
+  
+  int ind;
+  
+  double delx, dely, delz, delfx, delfy, delfz;
+  double rsq, dist, frp;
+  double delfx_p, delfy_p, delfz_p;
 
   int incr_nvalues = 1;
   if (variable_flag == DIST_DEPENDENED){
@@ -1723,30 +1762,28 @@ void FixAveCorrelatePeratom::calc_mean(int *indices_group, int ngroup_loc){
 	    mean[ind*nvalues+i] += array[inda][i * nsave + lastindex];
 	  }
 	} else if (variable_flag == DIST_DEPENDENED) {
-	  double *dr = new double[3];
-	  dr[0] = variable_store[indb][lastindex]- variable_store[inda][lastindex] ;
-	  dr[1] = variable_store[indb][lastindex+nsave]-variable_store[inda][lastindex+nsave]  ;
-	  dr[2] =  variable_store[indb][lastindex+2*nsave] -variable_store[inda][lastindex+2*nsave];
-	  domain->minimum_image(dr[0],dr[1],dr[2]);
-	  double dV = sqrt( dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2]);
+	  delx = variable_store[indb][lastindex]-variable_store[inda][lastindex]  ;
+	  dely = variable_store[indb][lastindex+nsave]-variable_store[inda][lastindex+nsave]  ;
+	  delz =  variable_store[indb][lastindex+2*nsave]-variable_store[inda][lastindex+2*nsave];
+	  domain->minimum_image(delx,dely,delz);
+	  rsq = delx*delx + dely*dely + delz*delz;
+	  dist = sqrt (rsq);
 
-	  //printf("dV=%f\n",dV);
-	  if(dV<range){
-	    double *res_data = new double[8];
-	    double *inp_data = new double[6];
-	    int p;
-	    for (p=0; p<3; p++) inp_data[p] = array[inda][ (i+p) * nsave + lastindex];
-	    for (p=0; p<3; p++) inp_data[p+3] = array[indb][ (i+p) * nsave + lastindex];
-	    decompose(res_data,dr,inp_data);
-	    //for (int z=0; z<8; z++) printf("res_data[%d]=%f\n",z,res_data[z]);
+	  if(dist<range){
+	    delfx = array[indb][ i*nsave + lastindex];
+	    delfy = array[indb][ i*nsave + nsave + lastindex];
+	    delfz = array[indb][ i*nsave + 2*nsave + lastindex];
+	    // calculate radial component of the forces/velocities (mapped on the distance vector)
+	    frp = (delfx*delx + delfy*dely +delfz*delz) / dist;
+	    //delfx_p = frp * delx / rsq;
+	    //delfy_p = frp * dely / rsq;
+	    //delfz_p = frp * delz / rsq;
 	    // calculate correlation
-	    int ind = dV/range*bins;
+	    ind = dist/range*bins;
 	    if(i==0) mean_count[ind]+=1.0;
-	    mean[ind*nvalues+i] += res_data[0];
-	    delete[] res_data;
-	    delete[] inp_data;
+	    mean[ind*nvalues+i] += frp;
+	    if (mean_it_flag) mean[ind*nvalues+i] -= mean_it_data[ind];
 	  }
-	  delete[] dr;
 	} else {
 	  if(i==0) mean_count[0] += 1.0;
 	  mean[i] += array[inda][i * nsave + lastindex];

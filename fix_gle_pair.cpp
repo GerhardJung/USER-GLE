@@ -56,7 +56,7 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
   nevery = 1;
   peratom_freq = 1;
   peratom_flag = 1;
-  size_peratom_cols = 9;
+  size_peratom_cols = 3*atom->nlocal;
   
   // read input parameter
   t_target = force->numeric(FLERR,arg[3]);
@@ -132,8 +132,7 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
   printf("checkpoint2\n");
   
   //memory for force save
-  nmax = atom->nmax;
-  memory->create(array,nmax,9*nmax,"fix_gle_pair:array");
+  memory->create(array,atom->nlocal,3*atom->nlocal,"fix_gle_pair:array");
   array_atom = array;
 
 }
@@ -152,6 +151,7 @@ FixGLEPair::~FixGLEPair()
   delete [] mem_kernel;
   memory->destroy(save_random);
   memory->destroy(save_velocity);
+  memory->destroy(array);
 
 }
 
@@ -287,6 +287,14 @@ void FixGLEPair::post_force(int vflag)
       // update random number
       save_random[i][j*(2*mem_count-1)+firstindex_r] = random->gaussian();
       
+      // reset array
+      array[i][j] = 0;
+      array[i][j+nlocal] = 0;
+      array[i][j+2*nlocal] = 0;
+      array[j][i] = 0;
+      array[j][i+nlocal] = 0;
+      array[j][i+2*nlocal] = 0;
+      
       // calculate forces
       if (rsq < r2cut) {
 	
@@ -332,6 +340,16 @@ void FixGLEPair::post_force(int vflag)
 	f[j][0] -= fcon[0] + fdis[0] + fran[0];
 	f[j][1] -= fcon[1] + fdis[1] + fran[1];
 	f[j][2] -= fcon[2] + fdis[2] + fran[2];
+	
+	array[i][j] = fcon[0]+fdis[0] + fran[0];
+	array[i][j+nlocal] = fcon[1]+ fdis[1] + fran[1];
+	array[i][j+2*nlocal] = fcon[2]+ fdis[2] + fran[2];
+	
+	//if (i==0 && j==2) printf("pair output: %f %f %f %f\n",dist,array[i][j],array[i][j+nlocal],array[i][j+2*nlocal]);
+	
+	array[j][i] = -fcon[0]- fdis[0] - fran[0];
+	array[j][i+nlocal] = -fcon[1]- fdis[1] - fran[1];
+	array[j][i+2*nlocal] = -fcon[2]- fdis[2] - fran[2];
 	
       }
     }

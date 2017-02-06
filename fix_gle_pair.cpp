@@ -48,7 +48,7 @@ using namespace FixConst;
 FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
   Fix(lmp, narg, arg)
 {
-  if (narg < 8) error->all(FLERR,"Illegal fix langevin command");
+  if (narg < 8) error->all(FLERR,"Illegal fix gle/pair command");
 
   // set fix properties
   
@@ -66,6 +66,11 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
   
   pot_count = force->numeric(FLERR,arg[5]);
   pot_file = fopen(arg[4],"r");
+  if (pot_file == NULL) {
+    char str[128];
+    sprintf(str,"Cannot open fix gle/pair file %s",arg[4]);
+    error->one(FLERR,str);
+  }
   dist_tabulated = new double[pot_count];
   pot_tabulated = new double[pot_count];
   phi_tabulated = new double[pot_count];
@@ -77,6 +82,11 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
   
   mem_count = force->numeric(FLERR,arg[8]);
   mem_file = fopen(arg[7],"r");
+  if (mem_file == NULL) {
+    char str[128];
+    sprintf(str,"Cannot open fix gle/pair file %s",arg[7]);
+    error->one(FLERR,str);
+  }
   mem_kernel = new double[mem_count];
   printf("checkpoint021\n");
   read_mem_file();
@@ -301,7 +311,7 @@ void FixGLEPair::post_force(int vflag)
 	// conservative
 	double tmp = (1-dist/rcut)*(1-dist/rcut);
 	tmp = tmp*tmp;
-	fpair = 795.69*(1+4*dist/rcut)*tmp/dist;
+	fpair = 0*(1+4*dist/rcut)*tmp/dist;
 	fcon[0] = fpair * delx;
 	fcon[1] = fpair * dely;
 	fcon[2] = fpair * delz;

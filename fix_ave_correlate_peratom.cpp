@@ -1891,8 +1891,8 @@ void FixAveCorrelatePeratom::calc_mean(int *indices_group, int ngroup_loc){
       //determine whether just autocorrelation or also cross correlation (different atoms)
       double ngroup_lower = a;
       double ngroup_upper = a+1;
-      if (type == CROSS || type == AUTOCROSS){
-	ngroup_lower = 0;
+      if (type == CROSS || type == AUTOCROSS || type == UPPERCROSS){
+	ngroup_lower = a;
 	ngroup_upper = ngroup_glo;
       }
       for (b = ngroup_lower; b < ngroup_upper; b++) {
@@ -1921,6 +1921,8 @@ void FixAveCorrelatePeratom::calc_mean(int *indices_group, int ngroup_loc){
 	  rsq = delx*delx + dely*dely + delz*delz;
 	  dist = sqrt (rsq);
 
+	  //if (dist < 2.0) printf("a %d b %d dist %f\n",a,b,dist);
+	  
 	  if(dist<range){
 	    if (memory_switch == PERPAIR) {
 	      fabx = array[inda*ngroup_glo+indb][ i*nsave + lastindex];

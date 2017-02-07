@@ -36,14 +36,7 @@ class FixGLEPairAux : public Fix {
 
   double memory_usage();
   void grow_arrays(int);
-  void copy_arrays(int, int, int);
-  int pack_exchange(int, double *);
-  int unpack_exchange(int, double *);
-  int pack_restart(int, double *);
-  void unpack_restart(int, int);
-  int size_restart(int);
-  int maxsize_restart();
-  void init_q_aux();
+  void init_zf_aux();
 
  protected:
   double dtv,dtf;
@@ -52,11 +45,15 @@ class FixGLEPairAux : public Fix {
   int aux_terms;
   double aux_a_self;
   double aux_a_cross;
+  double aux_b_self;
   double *aux_c_self;
   double *aux_c_cross;
   double *aux_lam;
 
-  double **q_aux;
+  double **z_aux;
+  double **f_aux;
+  
+  double *ran_save;
 
   class RanMars *random;
 };

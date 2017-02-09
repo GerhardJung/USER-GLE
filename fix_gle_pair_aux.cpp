@@ -178,17 +178,16 @@ void FixGLEPairAux::initial_integrate(int vflag)
   
   // save velocity for cross time integration
   for ( int i=0; i< nlocal; i++) v_save[i] = v[i][0];
-  for ( int i=0; i< nlocal; i++) ran_save[i] = random->gaussian();
 
   // Advance V by dt/2
   for (int i = 0; i < nlocal; i++) {
     if (mask[i] & groupbit) {
       // calculate integration constants
       meff = mass[type[i]];
-      theta_vs = (1 - update->dt*(aux_a_self)/meff);
-      alpha_vs = sqrt(kT/2.0)*sqrt(update->dt)/mass[type[i]]*(sqrt(aux_a_self+aux_a_cross)+sqrt(aux_a_self-aux_a_cross));
-      theta_vc = (1 - update->dt*aux_a_cross/meff);
-      alpha_vc = sqrt(kT/2.0)*sqrt(update->dt)/mass[type[i]]*(+sqrt(aux_a_self+aux_a_cross)-sqrt(aux_a_self-aux_a_cross));
+      theta_vs = (1 - update->dt*(aux_a_self)/meff/2.0);
+      alpha_vs = sqrt(kT/2.0)*sqrt(update->dt)/mass[type[i]]/2.0*(sqrt(aux_a_self+aux_a_cross)+sqrt(aux_a_self-aux_a_cross));
+      theta_vc = (1 - update->dt*aux_a_cross/meff/2.0);
+      alpha_vc = sqrt(kT/2.0)*sqrt(update->dt)/mass[type[i]]/2.0*(+sqrt(aux_a_self+aux_a_cross)-sqrt(aux_a_self-aux_a_cross));
       
       dtfm = dtf / mass[type[i]];
       
@@ -197,7 +196,7 @@ void FixGLEPairAux::initial_integrate(int vflag)
       v[i][0] *= theta_vs;
       
       //if (i==0) printf ("inst. friction: %f\n",v[i][0]);
-      v[i][0] += compute_vector(i)*sqrt(update->dt);
+      v[i][0] += alpha_vs*ran_save[i];
       
       //if (i==0) printf ("noise: %f\n",v[i][0]);
       
@@ -206,18 +205,18 @@ void FixGLEPairAux::initial_integrate(int vflag)
 	  //printf("i %d j %d\n",i,j);
 	  v[i][0] -= (1-theta_vc)*v_save[j];
 	  //if (i==0) printf ("neigh. fric.: %f\n",v[i][0]);
-	  //v[i][0] += alpha_vc*ran_save[j];
+	  v[i][0] += alpha_vc*ran_save[j];
 	  //if (i==0) printf ("neigh. noise.: %f\n",v[i][0]);
 	}
       }
-      //v[i][0] += dtfm * f[i][0];
+      v[i][0] += dtfm * f[i][0];
       //if (i==0) printf ("cons. force: %f\n",v[i][0]);
       for (int k = 0; k < aux_terms; k++) {
-	//v[i][0] -= dtfm * aux_c_self[k]*q_aux[i][k];
+	v[i][0] -= dtfm * aux_c_self[k]*q_aux[i][k];
 	//if (i==0) printf ("q fric.: %f\n",v[i][0]);
 	for (int j=0; j< nlocal; j++) {
 	  if (j!=i) {
-	    //v[i][0] += dtfm * aux_c_cross[k]*q_aux[j][k];
+	    v[i][0] += dtfm * aux_c_cross[k]*q_aux[j][k];
 	    //if (i==0) printf ("neigh. q fric.: %f\n",v[i][0]);
 	  }
 	}
@@ -245,7 +244,7 @@ void FixGLEPairAux::initial_integrate(int vflag)
       for (int k = 0; k < aux_terms; k++) {
 	theta_q = 1-update->dt/aux_lam[k];
         alpha_q = sqrt(update->dt/aux_lam[k])*(1.0/sqrt(aux_c_self[k]+aux_c_cross[k])+1.0/sqrt(aux_c_self[k]-aux_c_cross[k]));
-	alpha_qc = sqrt(update->dt/aux_lam[k])*(-1.0/sqrt(aux_c_self[k]+aux_c_cross[k])+1.0/sqrt(aux_c_self[k]-aux_c_cross[k]));
+	alpha_qc = sqrt(update->dt/aux_lam[k])*(+1.0/sqrt(aux_c_self[k]+aux_c_cross[k])-1.0/sqrt(aux_c_self[k]-aux_c_cross[k]));
 
         q_aux[i][k] *= theta_q;
         q_aux[i][k] += (1-theta_q)*mass[type[i]]/meff*aux_lam[k]*v[i][0];
@@ -269,7 +268,7 @@ void FixGLEPairAux::initial_integrate(int vflag)
 
 void FixGLEPairAux::final_integrate()
 {
-  /*
+
   double dtfm;
   double ftm2v = force->ftm2v;
 
@@ -298,7 +297,7 @@ void FixGLEPairAux::final_integrate()
     if (mask[i] & groupbit) {
       // calculate integration constants
       meff = mass[type[i]];
-      theta_vs = (1 - update->dt*(aux_a_self+aux_a_cross)/meff/2.0);
+      theta_vs = (1 - update->dt*(aux_a_self)/meff/2.0);
       alpha_vs = sqrt(kT/2.0)*sqrt(update->dt)/mass[type[i]]/2.0*(sqrt(aux_a_self+aux_a_cross)+sqrt(aux_a_self-aux_a_cross));
       theta_vc = (1 - update->dt*aux_a_cross/meff/2.0);
       alpha_vc = sqrt(kT/2.0)*sqrt(update->dt)/mass[type[i]]/2.0*(+sqrt(aux_a_self+aux_a_cross)-sqrt(aux_a_self-aux_a_cross));
@@ -306,25 +305,25 @@ void FixGLEPairAux::final_integrate()
       dtfm = dtf / mass[type[i]];
       
       v[i][0] *= theta_vs;
-      v[i][0] += alpha_vs  * ran_save[i]+alpha_vs  * ran_save[1];
+      v[i][0] += alpha_vs*ran_save[i];
       for (int j=0; j< nlocal; j++) {
 	if (j!=i) {
-	  //v[i][0] -= (1-theta_vc)*v_save[j];
-	  //v[i][0] += alpha_vc*ran_save[i];
+	  v[i][0] -= (1-theta_vc)*v_save[j];
+	  v[i][0] += alpha_vc*ran_save[j];
 	}
       }
-      //v[i][0] += dtfm * f[i][0];
+      v[i][0] += dtfm * f[i][0];
       for (int k = 0; k < aux_terms; k++) {
-	//v[i][0] -= dtfm * aux_c_self[k]*q_aux[i][k];
+	v[i][0] -= dtfm * aux_c_self[k]*q_aux[i][k];
 	for (int j=0; j< nlocal; j++) {
 	  if (j!=i) {
-	    //v[i][0] += dtfm * aux_c_cross[k]*q_aux[j][k];
+	    v[i][0] += dtfm * aux_c_cross[k]*q_aux[j][k];
 	  }
 	}
       }
     }
   }
-*/
+
 }
 
 /* ----------------------------------------------------------------------

@@ -107,6 +107,9 @@ FixGLEPairAux::FixGLEPairAux(LAMMPS *lmp, int narg, char **arg) :
   for (int i=0; i<atom->nlocal; i++) {
     ran_save[i]=random->gaussian();
   }
+  
+  memory->create(v_step, atom->nlocal, "gle/pair/aux:v_step");
+  memory->create(f_step, atom->nlocal, "gle/pair/aux:v_step");
 
   // initialize the extended variables
   init_q_aux();
@@ -178,6 +181,8 @@ void FixGLEPairAux::initial_integrate(int vflag)
   
   // save velocity for cross time integration
   for ( int i=0; i< nlocal; i++) v_save[i] = v[i][0];
+  for ( int i=0; i< nlocal; i++) v_step[i] = v[i][0];
+    for ( int i=0; i< nlocal; i++) ran_save[i] = random->gaussian();
 
   // Advance V by dt/2
   for (int i = 0; i < nlocal; i++) {
@@ -209,14 +214,14 @@ void FixGLEPairAux::initial_integrate(int vflag)
 	  //if (i==0) printf ("neigh. noise.: %f\n",v[i][0]);
 	}
       }
-      v[i][0] += dtfm * f[i][0];
+      v[i][0] += dtfm * f_step[i];
       //if (i==0) printf ("cons. force: %f\n",v[i][0]);
       for (int k = 0; k < aux_terms; k++) {
 	v[i][0] -= dtfm * aux_c_self[k]*q_aux[i][k];
 	//if (i==0) printf ("q fric.: %f\n",v[i][0]);
 	for (int j=0; j< nlocal; j++) {
 	  if (j!=i) {
-	    v[i][0] += dtfm * aux_c_cross[k]*q_aux[j][k];
+	    v[i][0] -= dtfm * aux_c_cross[k]*q_aux[j][k];
 	    //if (i==0) printf ("neigh. q fric.: %f\n",v[i][0]);
 	  }
 	}
@@ -290,7 +295,7 @@ void FixGLEPairAux::final_integrate()
   
   // save velocity for cross time integration
   for ( int i=0; i< nlocal; i++) v_save[i] = v[i][0];
-  for ( int i=0; i< nlocal; i++) ran_save[i] = random->gaussian();
+  for ( int i=0; i< nlocal; i++) f_step[i] = f[i][0];
 
   // Advance V by dt/2
   for (int i = 0; i < nlocal; i++) {
@@ -312,16 +317,21 @@ void FixGLEPairAux::final_integrate()
 	  v[i][0] += alpha_vc*ran_save[j];
 	}
       }
-      v[i][0] += dtfm * f[i][0];
+      v[i][0] += dtfm * f_step[i];
       for (int k = 0; k < aux_terms; k++) {
 	v[i][0] -= dtfm * aux_c_self[k]*q_aux[i][k];
 	for (int j=0; j< nlocal; j++) {
 	  if (j!=i) {
-	    v[i][0] += dtfm * aux_c_cross[k]*q_aux[j][k];
+	    v[i][0] -= dtfm * aux_c_cross[k]*q_aux[j][k];
 	  }
 	}
       }
     }
+  }
+ 
+  
+  for (int i = 0; i < nlocal; i++) {
+    f[i][0]=(v[i][0]-v_step[i])/update->dt;
   }
 
 }

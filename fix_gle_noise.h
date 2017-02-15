@@ -13,21 +13,21 @@
 
 #ifdef FIX_CLASS
 
-FixStyle(gle/pair/aux,FixGLEPairAux)
+FixStyle(gle/noise,FixGLENoise)
 
 #else
 
-#ifndef LMP_FIX_GLE_PAIR_AUX_H
-#define LMP_FIX_GLE_PAIR_AUX_H
+#ifndef LMP_FIX_GLE_NOISE_H
+#define LMP_FIX_GLE_NOISE_H
 
 #include "fix.h"
 
 namespace LAMMPS_NS {
 
-class FixGLEPairAux : public Fix {
+class FixGLENoise : public Fix {
  public:
-  FixGLEPairAux(class LAMMPS *, int, char **);
-  virtual ~FixGLEPairAux();
+  FixGLENoise(class LAMMPS *, int, char **);
+  virtual ~FixGLENoise();
   int setmask();
   virtual void init();
   virtual void initial_integrate(int);
@@ -36,14 +36,6 @@ class FixGLEPairAux : public Fix {
 
   double memory_usage();
   void grow_arrays(int);
-  void copy_arrays(int, int, int);
-  int pack_exchange(int, double *);
-  int unpack_exchange(int, double *);
-  int pack_restart(int, double *);
-  void unpack_restart(int, int);
-  int size_restart(int);
-  int maxsize_restart();
-  void init_q_aux();
 
  protected:
   double dtv,dtf;
@@ -52,14 +44,20 @@ class FixGLEPairAux : public Fix {
   int aux_terms;
   double aux_a_self;
   double aux_a_cross;
-  double *aux_c_self;
-  double *aux_c_cross;
-  double *aux_lam;
+  double *aux_c11;
+  double *aux_c21;
+  double *aux_c22;
+  double *aux_c24;
+  double *aux_lam1;
+  double *aux_lam2;
 
   double **q_aux;
 
   class RanMars *random;
-  double *ran_save;
+  double **ran_self;
+  double **ran_cross;
+  
+  double **chol_decomp;
   
   double *v_step;
   double *f_step;

@@ -105,24 +105,44 @@ FixGLEPairAux::FixGLEPairAux(LAMMPS *lmp, int narg, char **arg) :
   memory->create(q_B, atom->nlocal*atom->nlocal,atom->nlocal*atom->nlocal*aux_terms, "gle/pair/aux:q_B");
   
   q_B[0][0]=2.44949;
-  q_B[0][1]=1.22474;
+  q_B[0][1]=0.0;
   q_B[0][2]=0.0;
   q_B[0][3]=0.0;
   
-  q_B[1][0]=0;
+  q_B[1][0]=1.22474;
   q_B[1][1]=1.58114;
-  q_B[1][2]=1.26491;
+  q_B[1][2]=0;
+  q_B[1][3]=0;
+  
+  q_B[2][0]=0.0;
+  q_B[2][1]=-1.26491;
+  q_B[2][2]=1.54919;
+  q_B[2][3]=0.0;
+  
+  q_B[3][0]=0.0;
+  q_B[3][1]=0.0;
+  q_B[3][2]=1.93649;
+  q_B[3][3]=1.5;
+  
+  /*q_B[0][0]=2.44949;
+  q_B[0][1]=0.0;
+  q_B[0][2]=0.0;
+  q_B[0][3]=0.0;
+  
+  q_B[1][0]=1.22474;
+  q_B[1][1]=1.58114;
+  q_B[1][2]=0.0;
   q_B[1][3]=0.0;
   
   q_B[2][0]=0.0;
   q_B[2][1]=0.0;
-  q_B[2][2]=1.54919;
-  q_B[2][3]=1.93649;
+  q_B[2][2]=2.0;
+  q_B[2][3]=0.0;
   
   q_B[3][0]=0.0;
   q_B[3][1]=0.0;
-  q_B[3][2]=0.0;
-  q_B[3][3]=1.5;
+  q_B[3][2]=1.5;
+  q_B[3][3]=1.93649;*/
 
   // initialize Marsaglia RNG with processor-unique seed
   random = new RanMars(lmp,seed + comm->me);
@@ -207,14 +227,14 @@ void FixGLEPairAux::initial_integrate(int vflag)
     if (mask[i] & groupbit) {
       // calculate integration constants
       meff = mass[type[i]];   
-      dtfm = dtf / mass[type[i]]/2.0;
-      v[i][0] += dtfm * f_step[i];
+      dtfm = dtf / mass[type[i]];
+      //v[i][0] += dtfm * f_step[i];
       
       for (int k = 0; k < aux_terms; k++) {
-	v[i][0] -= (+1)*dtfm *q_aux[i][k*nlocal+i]; //ps11,ps22
+	v[i][0] -= (+1)*dtfm *q_aux[i][i]; //ps11,ps22
 	for (int j=0; j< nlocal; j++) {
 	  if (j!=i) {
-	    v[i][0] -= (-1)*dtfm *q_aux[i][k*nlocal+j]; //ps21,ps12
+	    v[i][0] -= (-1)*dtfm *q_aux[i][j]; //ps21,ps12
 	  }
 	}
       }
@@ -231,8 +251,8 @@ void FixGLEPairAux::initial_integrate(int vflag)
   for (int i = 0; i < nlocal; i++) {
     for (int k = 0; k < aux_terms; k++) {
       for (int j = 0; j < nlocal; j++) {
-	q_ran[i][k*nlocal+j] = random->gaussian();
-	q_save[i][k*nlocal+j] = q_aux[i][k*nlocal+j];
+	q_ran[i][j] = random->gaussian();
+	q_save[i][j] = q_aux[i][j];
       }
     } 
   }
@@ -243,36 +263,22 @@ void FixGLEPairAux::initial_integrate(int vflag)
       for (int k = 0; k < aux_terms; k++) {
 	
 	//integrate self auxilliary variable
-	theta_qss = 1-update->dt*(3);
-	q_aux[i][k*nlocal+i] *= theta_qss; //c11,c44
+	theta_qss = 1-update->dt*(1);
+	q_aux[i][i] *= theta_qss;	//a
 	for (int j = 0; j < nlocal; j++) {
 	  if (j!=i) {
-	    theta_qsc = 1-update->dt*(1);
-	    q_aux[i][k*nlocal+i] -= (1-theta_qsc)*q_save[i][k*nlocal+j]; //c12,c43
-	  }
-	}
-	
-	//integrate cross auxilliary variable
-	for (int j = 0; j < nlocal; j++) {
-	  if (j!=i) {
-	    theta_qcc11 = 1-update->dt*(1);
-	    q_aux[i][k*nlocal+j] *= theta_qcc11; //c22,c33
-	    
-	    theta_qcs = 1-update->dt*(1);
-	    q_aux[i][k*nlocal+j] -= (1-theta_qcs)*q_save[i][k*nlocal+i]; //c21,c34
-	    
-	    theta_qcc12 = 1-update->dt*(0.5);
-	    q_aux[i][k*nlocal+j] -= (1-theta_qcc12)*q_save[j][k*nlocal+i]; //c23,c32
+	    theta_qsc = 1-update->dt*(2);
+	    q_aux[i][j] *= (theta_qsc); //b
 	  }
 	}
 	
 	//include momenta
 	theta_qsps = 1-update->dt*(-2.0);
-	q_aux[i][k*nlocal+i] -= (1-theta_qsps)*v[i][0];
+	q_aux[i][i] -= (1-theta_qsps)*v[i][0];
 	for (int j = 0; j < nlocal; j++) {
 	  if (j!=i) {
-	    theta_qspc = 1-update->dt*(0.5);
-	    q_aux[i][k*nlocal+j] -= (1-theta_qspc)*v[j][0];
+	    theta_qspc = 1-update->dt*(-0.5);
+	    q_aux[i][j] -= (1-theta_qspc)*v[j][0];
 	  }
 	}
 	
@@ -280,7 +286,7 @@ void FixGLEPairAux::initial_integrate(int vflag)
 	for (int j = 0; j < nlocal; j++) {
 	  for (int i1 = 0; i1 < nlocal; i1++) {
 	    for (int j1 = 0; j1 < nlocal; j1++) {
-	      q_aux[i][k*nlocal+j] += sqrt(update->dt)*q_B[i*nlocal+j][i1*nlocal+j1]*q_ran[i1][j1];
+	      q_aux[i][j] += sqrt(update->dt)*q_B[i*nlocal+j][i1*nlocal+j1]*q_ran[i1][j1];
 	    }
 	  }
 	}
@@ -326,14 +332,14 @@ void FixGLEPairAux::final_integrate()
     if (mask[i] & groupbit) {
       // calculate integration constants
       meff = mass[type[i]];   
-      dtfm = dtf / mass[type[i]]/2.0;
-      v[i][0] += dtfm * f_step[i];
+      dtfm = dtf / mass[type[i]];
+      //v[i][0] += dtfm * f_step[i];
       
       for (int k = 0; k < aux_terms; k++) {
-	v[i][0] -= (+1)*dtfm *q_aux[i][k*nlocal+i]; //ps11,ps22
+	v[i][0] -= (+1)*dtfm *q_aux[i][i]; //ps11,ps22
 	for (int j=0; j< nlocal; j++) {
 	  if (j!=i) {
-	    v[i][0] -= (-1)*dtfm *q_aux[i][k*nlocal+j]; //ps21,ps12
+	    v[i][0] -= (-1)*dtfm *q_aux[i][j]; //ps21,ps12
 	  }
 	}
       }
@@ -353,9 +359,11 @@ void FixGLEPairAux::final_integrate()
 
 double FixGLEPairAux::compute_vector(int n)
 {
-  double ran =0;
+  int nlocal = atom->nlocal;
+  int j = n%nlocal;
+  int i = (n - j)/nlocal;
   
-  return ran;
+  return q_aux[i][j];
 }
 
 

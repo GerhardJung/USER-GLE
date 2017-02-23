@@ -232,29 +232,14 @@ void FixGLENoise::initial_integrate(int vflag)
     if (mask[i] & groupbit) {
       for (int k = 0; k < aux_terms; k++) {
 	theta_q1 = 1-update->dt/aux_lam1[k];
-	theta_q2 = 1-update->dt/aux_lam2[k];
-        alpha_q11 = sqrt(update->dt)*aux_c11[k];
-	alpha_q21 = sqrt(update->dt)*aux_c21[k];
-	alpha_q22 = sqrt(update->dt)*aux_c22[k];
-	alpha_q24 = sqrt(update->dt)*aux_c24[k];
-	
-	// integrate self auxilliary variables
 	q_aux[i][k*atom->nlocal+i] *= theta_q1;
-	for (int j = 0; j < nlocal; j++) {
-	  if (j!=i) {
-	    //q_aux[i][k*atom->nlocal+i] += alpha_q11*ran_self[i][atom->nlocal*k+j];
-	  }
-	}
 	
-	// integrate cross auxilliary variables
-	for (int j = 0; j < nlocal; j++) {
-	  if (j!=i) {
-	    q_aux[i][k*atom->nlocal+j] *= theta_q2;
-	    //q_aux[i][k*atom->nlocal+j] += alpha_q21*ran_self[i][atom->nlocal*k+j];
-	    q_aux[i][k*atom->nlocal+j] += alpha_q22*ran_cross[i][atom->nlocal*k+j];
-	    q_aux[i][k*atom->nlocal+j] += alpha_q24*ran_cross[j][atom->nlocal*k+i];  
-	  }
+	double sum = 0.0;
+	for (int l=0; l<nlocal; l++) {
+	  sum += ran_self[0][l]*chol_decomp[l][i];
 	}
+	q_aux[i][k*atom->nlocal+i] += sqrt(2*update->dt)*sum;
+	
       }
     }
   }

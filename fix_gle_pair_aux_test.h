@@ -13,21 +13,21 @@
 
 #ifdef FIX_CLASS
 
-FixStyle(gle/pair/aux,FixGLEPairAux)
+FixStyle(gle/pair/aux/test,FixGLEPairAuxTest)
 
 #else
 
-#ifndef LMP_FIX_GLE_PAIR_AUX_H
-#define LMP_FIX_GLE_PAIR_AUX_H
+#ifndef LMP_FIX_GLE_PAIR_AUX_TEST_H
+#define LMP_FIX_GLE_PAIR_AUX_TEST_H
 
 #include "fix.h"
 
 namespace LAMMPS_NS {
 
-class FixGLEPairAux : public Fix {
+class FixGLEPairAuxTest : public Fix {
  public:
-  FixGLEPairAux(class LAMMPS *, int, char **);
-  virtual ~FixGLEPairAux();
+  FixGLEPairAuxTest(class LAMMPS *, int, char **);
+  virtual ~FixGLEPairAuxTest();
   int setmask();
   virtual void init();
   virtual void initial_integrate(int);
@@ -36,6 +36,13 @@ class FixGLEPairAux : public Fix {
 
   double memory_usage();
   void grow_arrays(int);
+  void copy_arrays(int, int, int);
+  int pack_exchange(int, double *);
+  int unpack_exchange(int, double *);
+  int pack_restart(int, double *);
+  void unpack_restart(int, int);
+  int size_restart(int);
+  int maxsize_restart();
   void init_q_aux();
 
  protected:
@@ -50,11 +57,9 @@ class FixGLEPairAux : public Fix {
   double *aux_lam;
 
   double **q_aux;
-  double **q_ran;
-  double **q_save;
 
   class RanMars *random;
-  double **q_B;
+  double *ran_save;
   
   double *v_step;
   double *f_step;

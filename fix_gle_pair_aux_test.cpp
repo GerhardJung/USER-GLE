@@ -19,7 +19,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
-#include "fix_gle_pair_aux.h"
+#include "fix_gle_pair_aux_test.h"
 #include "math_extra.h"
 #include "atom.h"
 #include "force.h"
@@ -40,7 +40,7 @@ using namespace FixConst;
    Parses parameters passed to the method, allocates some memory
 ------------------------------------------------------------------------- */
 
-FixGLEPairAux::FixGLEPairAux(LAMMPS *lmp, int narg, char **arg) :
+FixGLEPairAuxTest::FixGLEPairAuxTest(LAMMPS *lmp, int narg, char **arg) :
   Fix(lmp, narg, arg)
 {
 
@@ -100,32 +100,13 @@ FixGLEPairAux::FixGLEPairAux(LAMMPS *lmp, int narg, char **arg) :
   // allocate memory for Prony series extended variables
   q_aux = NULL;
   grow_arrays(atom->nlocal);
-  memory->create(q_ran, atom->nlocal,atom->nlocal*aux_terms, "gle/pair/aux:q_ran");
-  memory->create(q_save, atom->nlocal,atom->nlocal*aux_terms, "gle/pair/aux:q_save");
-  memory->create(q_B, atom->nlocal*atom->nlocal,atom->nlocal*atom->nlocal*aux_terms, "gle/pair/aux:q_B");
-  
-  q_B[0][0]=2.44949;
-  q_B[0][1]=1.22474;
-  q_B[0][2]=0.0;
-  q_B[0][3]=0.0;
-  
-  q_B[1][0]=0;
-  q_B[1][1]=1.58114;
-  q_B[1][2]=1.26491;
-  q_B[1][3]=0.0;
-  
-  q_B[2][0]=0.0;
-  q_B[2][1]=0.0;
-  q_B[2][2]=1.54919;
-  q_B[2][3]=1.93649;
-  
-  q_B[3][0]=0.0;
-  q_B[3][1]=0.0;
-  q_B[3][2]=0.0;
-  q_B[3][3]=1.5;
 
   // initialize Marsaglia RNG with processor-unique seed
   random = new RanMars(lmp,seed + comm->me);
+  memory->create(ran_save, atom->nlocal, "gle/pair/aux:ran_save");
+  for (int i=0; i<atom->nlocal; i++) {
+    ran_save[i]=random->gaussian();
+  }
   
   memory->create(v_step, atom->nlocal, "gle/pair/aux:v_step");
   memory->create(f_step, atom->nlocal, "gle/pair/aux:v_step");
@@ -139,7 +120,7 @@ FixGLEPairAux::FixGLEPairAux(LAMMPS *lmp, int narg, char **arg) :
    Destroys memory allocated by the method
 ------------------------------------------------------------------------- */
 
-FixGLEPairAux::~FixGLEPairAux()
+FixGLEPairAuxTest::~FixGLEPairAuxTest()
 {
   delete random;
   memory->destroy(aux_c_self);
@@ -153,7 +134,7 @@ FixGLEPairAux::~FixGLEPairAux()
    Specifies when the fix is called during the timestep
 ------------------------------------------------------------------------- */
 
-int FixGLEPairAux::setmask()
+int FixGLEPairAuxTest::setmask()
 {
   int mask = 0;
   mask |= INITIAL_INTEGRATE;
@@ -165,7 +146,7 @@ int FixGLEPairAux::setmask()
    Initialize the method parameters before a run
 ------------------------------------------------------------------------- */
 
-void FixGLEPairAux::init()
+void FixGLEPairAuxTest::init()
 {
   dtv = update->dt;
   dtf = 0.5 * update->dt * force->ftm2v;
@@ -175,15 +156,15 @@ void FixGLEPairAux::init()
    First half of a timestep (V^{n} -> V^{n+1/2}; X^{n} -> X^{n+1})
 ------------------------------------------------------------------------- */
 
-void FixGLEPairAux::initial_integrate(int vflag)
+void FixGLEPairAuxTest::initial_integrate(int vflag)
 {
   double dtfm;
   double ftm2v = force->ftm2v;
 
   double v_save[atom->nlocal];
   double meff;
-  double theta_qss, theta_qsc, theta_qcs, theta_qcc11, theta_qcc12;
-  double theta_qsps, theta_qspc;
+  double theta_vs, alpha_vs, theta_vc, alpha_vc;
+  double theta_q, alpha_q, alpha_qc;
 
   // update v and x of atoms in group
   double **x = atom->x;
@@ -201,90 +182,33 @@ void FixGLEPairAux::initial_integrate(int vflag)
   // save velocity for cross time integration
   for ( int i=0; i< nlocal; i++) v_save[i] = v[i][0];
   for ( int i=0; i< nlocal; i++) v_step[i] = v[i][0];
+  for ( int i=0; i< nlocal; i++) ran_save[i] = random->gaussian();
 
-  // Advance V by dt/2
-  for (int i = 0; i < nlocal; i++) {
-    if (mask[i] & groupbit) {
-      // calculate integration constants
-      meff = mass[type[i]];   
-      dtfm = dtf / mass[type[i]]/2.0;
-      v[i][0] += dtfm * f_step[i];
-      
-      for (int k = 0; k < aux_terms; k++) {
-	v[i][0] -= (+1)*dtfm *q_aux[i][k*nlocal+i]; //ps11,ps22
-	for (int j=0; j< nlocal; j++) {
-	  if (j!=i) {
-	    v[i][0] -= (-1)*dtfm *q_aux[i][k*nlocal+j]; //ps21,ps12
-	  }
-	}
-      }
-    }
-  }
 
-  // Advance X by dt
-  for (int i = 0; i < nlocal; i++) {
-    if (mask[i] & groupbit) {
-      x[i][0] += dtv * v[i][0];
-    }
-  }
-
+  double ran_q[nlocal*aux_terms];
   for (int i = 0; i < nlocal; i++) {
     for (int k = 0; k < aux_terms; k++) {
-      for (int j = 0; j < nlocal; j++) {
-	q_ran[i][k*nlocal+j] = random->gaussian();
-	q_save[i][k*nlocal+j] = q_aux[i][k*nlocal+j];
-      }
+      ran_q[k+aux_terms*i] = random->gaussian();
     } 
   }
-  
   // Advance Q by dt
   for (int i = 0; i < nlocal; i++) {
+    meff = mass[type[i]];
     if (mask[i] & groupbit) {
       for (int k = 0; k < aux_terms; k++) {
-	
-	//integrate self auxilliary variable
-	theta_qss = 1-update->dt*(3);
-	q_aux[i][k*nlocal+i] *= theta_qss; //c11,c44
-	for (int j = 0; j < nlocal; j++) {
+	theta_q = 1-update->dt/aux_lam[k];
+        alpha_q = sqrt(update->dt/aux_lam[k])*(1.0/sqrt(aux_c_self[k]+aux_c_cross[k])+1.0/sqrt(aux_c_self[k]-aux_c_cross[k]));
+	alpha_qc = sqrt(update->dt/aux_lam[k])*(+1.0/sqrt(aux_c_self[k]+aux_c_cross[k])-1.0/sqrt(aux_c_self[k]-aux_c_cross[k]));
+
+        q_aux[i][k] *= theta_q;
+        q_aux[i][k] += (1-theta_q)*mass[type[i]]/meff*aux_lam[k]*v[i][0];
+        q_aux[i][k] += alpha_q*sqrt(kT/2.0) * ran_q[k+aux_terms*i];
+	for (int j=0; j< nlocal; j++) {
 	  if (j!=i) {
-	    theta_qsc = 1-update->dt*(1);
-	    q_aux[i][k*nlocal+i] -= (1-theta_qsc)*q_save[i][k*nlocal+j]; //c12,c43
+	    q_aux[i][k] += alpha_qc * sqrt(kT/2.0) * ran_q[k+aux_terms*j];
 	  }
 	}
-	
-	//integrate cross auxilliary variable
-	for (int j = 0; j < nlocal; j++) {
-	  if (j!=i) {
-	    theta_qcc11 = 1-update->dt*(1);
-	    q_aux[i][k*nlocal+j] *= theta_qcc11; //c22,c33
-	    
-	    theta_qcs = 1-update->dt*(1);
-	    q_aux[i][k*nlocal+j] -= (1-theta_qcs)*q_save[i][k*nlocal+i]; //c21,c34
-	    
-	    theta_qcc12 = 1-update->dt*(0.5);
-	    q_aux[i][k*nlocal+j] -= (1-theta_qcc12)*q_save[j][k*nlocal+i]; //c23,c32
-	  }
-	}
-	
-	//include momenta
-	theta_qsps = 1-update->dt*(-2.0);
-	q_aux[i][k*nlocal+i] -= (1-theta_qsps)*v[i][0];
-	for (int j = 0; j < nlocal; j++) {
-	  if (j!=i) {
-	    theta_qspc = 1-update->dt*(0.5);
-	    q_aux[i][k*nlocal+j] -= (1-theta_qspc)*v[j][0];
-	  }
-	}
-	
-	// include noise
-	for (int j = 0; j < nlocal; j++) {
-	  for (int i1 = 0; i1 < nlocal; i1++) {
-	    for (int j1 = 0; j1 < nlocal; j1++) {
-	      q_aux[i][k*nlocal+j] += sqrt(update->dt)*q_B[i*nlocal+j][i1*nlocal+j1]*q_ran[i1][j1];
-	    }
-	  }
-	}
-	
+	//if (i==0) printf ("v_q^2: %f\n",q_aux[i][k]*q_aux[i][k]);
       }
     }
   }
@@ -296,7 +220,7 @@ void FixGLEPairAux::initial_integrate(int vflag)
    Second half of a timestep (V^{n+1/2} -> V^{n+1})
 ------------------------------------------------------------------------- */
 
-void FixGLEPairAux::final_integrate()
+void FixGLEPairAuxTest::final_integrate()
 {
 
   double dtfm;
@@ -319,21 +243,35 @@ void FixGLEPairAux::final_integrate()
   double kT = (force->boltz)*t_target/(force->mvv2e);
   
   // save velocity for cross time integration
+  for ( int i=0; i< nlocal; i++) v_save[i] = v[i][0];
   for ( int i=0; i< nlocal; i++) f_step[i] = f[i][0];
 
   // Advance V by dt/2
   for (int i = 0; i < nlocal; i++) {
     if (mask[i] & groupbit) {
       // calculate integration constants
-      meff = mass[type[i]];   
-      dtfm = dtf / mass[type[i]]/2.0;
-      v[i][0] += dtfm * f_step[i];
+      meff = mass[type[i]];
+      theta_vs = (1 - update->dt*(aux_a_self)/meff/2.0);
+      alpha_vs = sqrt(kT/2.0)*sqrt(update->dt)/mass[type[i]]/2.0*(sqrt(aux_a_self+aux_a_cross)+sqrt(aux_a_self-aux_a_cross));
+      theta_vc = (1 - update->dt*aux_a_cross/meff/2.0);
+      alpha_vc = sqrt(kT/2.0)*sqrt(update->dt)/mass[type[i]]/2.0*(+sqrt(aux_a_self+aux_a_cross)-sqrt(aux_a_self-aux_a_cross));
       
+      dtfm = dtf / mass[type[i]];
+      
+      v[i][0] *= theta_vs;
+      v[i][0] += alpha_vs*ran_save[i];
+      for (int j=0; j< nlocal; j++) {
+	if (j!=i) {
+	  v[i][0] -= (1-theta_vc)*v_save[j];
+	  v[i][0] += alpha_vc*ran_save[j];
+	}
+      }
+      v[i][0] += dtfm * f_step[i];
       for (int k = 0; k < aux_terms; k++) {
-	v[i][0] -= (+1)*dtfm *q_aux[i][k*nlocal+i]; //ps11,ps22
+	v[i][0] -= dtfm * aux_c_self[k]*q_aux[i][k];
 	for (int j=0; j< nlocal; j++) {
 	  if (j!=i) {
-	    v[i][0] -= (-1)*dtfm *q_aux[i][k*nlocal+j]; //ps21,ps12
+	    v[i][0] -= dtfm * aux_c_cross[k]*q_aux[j][k];
 	  }
 	}
       }
@@ -351,9 +289,35 @@ void FixGLEPairAux::final_integrate()
    memory usage of local atom-based arrays
 ------------------------------------------------------------------------- */
 
-double FixGLEPairAux::compute_vector(int n)
+double FixGLEPairAuxTest::compute_vector(int n)
 {
+  int nlocal = atom->nlocal;
   double ran =0;
+  double *mass = atom->mass;
+    int *type = atom->type;
+    double kT = (force->boltz)*t_target/(force->mvv2e);
+  
+    double alpha_vs = sqrt(kT/2.0)*(sqrt(aux_a_self-aux_a_cross)+sqrt(aux_a_self+aux_a_cross));
+    double alpha_vc = sqrt(kT/2.0)*(-sqrt(aux_a_self-aux_a_cross)+sqrt(aux_a_self+aux_a_cross));
+  
+  if (n<2) {
+    
+  
+    ran += alpha_vs * ran_save[n];
+      
+    for (int j=0; j< nlocal; j++) {
+      if (j!=n) {
+	ran += alpha_vc*ran_save[j];
+      }
+    }
+  } else if (n==2) {
+     ran += compute_vector(0);
+     ran += compute_vector(1);
+
+  } else if (n==3) {
+    ran += compute_vector(0);
+    ran -= compute_vector(1);
+  }
   
   return ran;
 }
@@ -363,9 +327,9 @@ double FixGLEPairAux::compute_vector(int n)
    memory usage of local atom-based arrays
 ------------------------------------------------------------------------- */
 
-double FixGLEPairAux::memory_usage()
+double FixGLEPairAuxTest::memory_usage()
 {
-  double bytes = atom->nlocal*atom->nlocal*aux_terms*sizeof(double);
+  double bytes = atom->nlocal*aux_terms*sizeof(double);
   return bytes;
 }
 
@@ -373,9 +337,105 @@ double FixGLEPairAux::memory_usage()
    allocate local atom-based arrays
 ------------------------------------------------------------------------- */
 
-void FixGLEPairAux::grow_arrays(int nmax)
+void FixGLEPairAuxTest::grow_arrays(int nmax)
 {
-  memory->grow(q_aux, atom->nlocal,atom->nlocal* aux_terms,"gld:q_aux");
+  memory->grow(q_aux, atom->nlocal, aux_terms,"gld:q_aux");
+}
+
+/* ----------------------------------------------------------------------
+   copy values within local atom-based arrays
+------------------------------------------------------------------------- */
+
+void FixGLEPairAuxTest::copy_arrays(int i, int j, int delflag)
+{
+  for (int k = 0; k < aux_terms; k++) {
+    q_aux[j][k] = q_aux[i][k];
+  }
+}
+
+/* ----------------------------------------------------------------------
+   Pack extended variables assoc. w/ atom i into buffer for exchange
+   with another processor
+------------------------------------------------------------------------- */
+
+int FixGLEPairAuxTest::pack_exchange(int i, double *buf)
+{
+  int m = 0;
+  for (int k = 0; k < aux_terms; k++) {
+    buf[m++] = q_aux[i][k];
+  }
+  return m;
+}
+
+/* ----------------------------------------------------------------------
+   Unpack extended variables from exchange with another processor
+------------------------------------------------------------------------- */
+
+int FixGLEPairAuxTest::unpack_exchange(int nlocal, double *buf)
+{
+  int m = 0;
+  for (int k = 0; k < aux_terms; k++) {
+    q_aux[nlocal][k] = buf[m++];
+  }
+  return m;
+}
+
+
+/* ----------------------------------------------------------------------
+   Pack extended variables assoc. w/ atom i into buffer for
+   writing to a restart file
+------------------------------------------------------------------------- */
+
+int FixGLEPairAuxTest::pack_restart(int i, double *buf)
+{
+  int m = 0;
+  buf[m++] = aux_terms + 1;
+  for (int k = 0; k < aux_terms; k++)
+  {
+    buf[m++] = q_aux[i][k];
+  }
+  return m;
+}
+
+/* ----------------------------------------------------------------------
+   Unpack extended variables to restart the fix from a restart file
+------------------------------------------------------------------------- */
+
+void FixGLEPairAuxTest::unpack_restart(int nlocal, int nth)
+{
+  double **extra = atom->extra;
+
+  // skip to the nth set of extended variables
+
+  int m = 0;
+  for (int i = 0; i< nth; i++) m += static_cast<int> (extra[nlocal][m]);
+  m++;
+
+  for (int k = 0; k < aux_terms; k=k+3)
+  {
+    q_aux[nlocal][k] = extra[nlocal][m++];
+  }
+}
+
+/* ----------------------------------------------------------------------
+   Returns the number of items in atomic restart data associated with
+   local atom nlocal.  Used in determining the total extra data stored by
+   fixes on a given processor.
+------------------------------------------------------------------------- */
+
+int FixGLEPairAuxTest::size_restart(int nlocal)
+{
+  return aux_terms+1;
+}
+
+/* ----------------------------------------------------------------------
+   Returns the maximum number of items in atomic restart data
+   Called in Modify::restart for peratom restart.
+------------------------------------------------------------------------- */
+
+int FixGLEPairAuxTest::maxsize_restart()
+{
+  return aux_terms+1;
 }
 
 /* ----------------------------------------------------------------------
@@ -383,7 +443,7 @@ void FixGLEPairAux::grow_arrays(int nmax)
    at t_start.
 ------------------------------------------------------------------------- */
 
-void FixGLEPairAux::init_q_aux()
+void FixGLEPairAuxTest::init_q_aux()
 {
   int icoeff;
   double eq_sdev=0.0;
@@ -396,10 +456,10 @@ void FixGLEPairAux::init_q_aux()
     if (atom->mask[i] & groupbit) {
       icoeff = 0;
       for (int k = 0; k < aux_terms; k++) {
-        for (int j = 0; j < atom->nlocal; j++) {
-	  q_aux[i][k*atom->nlocal+j] = 0;
+        eq_sdev = scale*sqrt(aux_c_self[icoeff]/aux_lam[icoeff]);
+        q_aux[i][k] = 0;
 
-	}
+        icoeff += 1;
       }
     }
   }

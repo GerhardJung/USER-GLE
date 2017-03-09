@@ -43,11 +43,10 @@ class FixGLEPairAux : public Fix {
   double t_target;
 
   int aux_terms;
-  double aux_a_self;
-  double aux_a_cross;
-  double *aux_c_self;
-  double *aux_c_cross;
-  double *aux_lam;
+  
+  int npair;
+  int **pair_list_part;
+  int **pair_list_coef;
 
   double **q_aux;
   double **q_ran;
@@ -55,6 +54,8 @@ class FixGLEPairAux : public Fix {
 
   class RanMars *random;
   double **q_B;
+  double **q_ps;
+  double **q_s;
   
   double *v_step;
   double *f_step;

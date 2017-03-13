@@ -36,6 +36,7 @@ class FixGLEPairAux : public Fix {
 
   double memory_usage();
   void grow_arrays(int);
+  void read_coef_aux();
   void init_q_aux();
 
  protected:
@@ -53,9 +54,14 @@ class FixGLEPairAux : public Fix {
   double **q_save;
 
   class RanMars *random;
+  
+  // input
   double **q_B;
   double **q_ps;
   double **q_s;
+  
+  // matrix exp
+  double **q_int;
   
   double *v_step;
   double *f_step;

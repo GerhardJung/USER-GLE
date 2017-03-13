@@ -51,18 +51,13 @@ FixGLEPairAux::FixGLEPairAux(LAMMPS *lmp, int narg, char **arg) :
   vector_flag = 1;
   size_vector = 8*npair;
 
-  int narg_min = 6;
+  int narg_min = 5;
   if (narg < narg_min) error->all(FLERR,"Illegal fix gle/pair/aux command");
 
   t_target = force->numeric(FLERR,arg[3]);
   
   int seed = force->inumeric(FLERR,arg[4]);
-  
-  aux_terms = force->inumeric(FLERR,arg[5]);
-
-  // allocate memory and read-in auxiliary series coefficients
-  if (aux_terms < 0)
-    error->all(FLERR,"Fix gle/pair/aux terms must be > 0");
+ 
   
   // Error checking for the first set of required input arguments
   if (seed <= 0) error->all(FLERR,"Illegal fix gle/pair/aux command");
@@ -82,43 +77,7 @@ FixGLEPairAux::FixGLEPairAux(LAMMPS *lmp, int narg, char **arg) :
   pair_list_coef[1][1]=-1;
   
   q_aux = NULL;
-  grow_arrays(npair);
-  memory->create(q_ran, npair,aux_terms*8, "gle/pair/aux:q_ran");
-  memory->create(q_save, npair,aux_terms*8, "gle/pair/aux:q_save");
-  memory->create(q_B, npair,aux_terms*4*4, "gle/pair/aux:q_B");
-  memory->create(q_ps, npair,aux_terms*4, "gle/pair/aux:q_ps");
-  memory->create(q_s, npair,aux_terms*4, "gle/pair/aux:q_s");
-  
-  q_B[0][0]=1.0;
-  q_B[0][1]=0.0;
-  q_B[0][2]=0.0;
-  q_B[0][3]=0.0;
-  
-  q_B[0][4]=0.0;
-  q_B[0][5]=1.0;
-  q_B[0][6]=0;
-  q_B[0][7]=0;
-  
-  q_B[0][8]=0.9;
-  q_B[0][9]=-0.429252;
-  q_B[0][10]=0.0757794;
-  q_B[0][11]=0.0;
-  
-  q_B[0][12]=0.429252;
-  q_B[0][13]=0.9;
-  q_B[0][14]=0.0;
-  q_B[0][15]=0.0757792;
-  
-  q_ps[0][0]=-72.97;
-  q_ps[0][1]=80.6478;
-  q_ps[0][2]=7.592;
-  q_ps[0][3]=-13.8677;
-  
-  q_s[0][0]=1-3.50121*update->dt;
-  q_s[0][1]=1-43.9248*update->dt;
-  q_s[0][2]=1-5.73696*update->dt;
-  q_s[0][3]=1-39.5187*update->dt;
-  
+  read_coef_aux();
   
   // initialize Marsaglia RNG with processor-unique seed
   random = new RanMars(lmp,seed + comm->me);
@@ -215,10 +174,13 @@ void FixGLEPairAux::initial_integrate(int vflag)
 	ind_coef = pair_list_coef[i][j];
 	ind_q = ( i < pair_list_part[i][j]) ? 0 : 4;
 	//printf("coef %d, q %d\n",ind_coef, ind_q);
-	v[i][0] -= q_ps[ind_coef][0]*dtfm *q_aux[ind_coef][ind_q];
-	v[i][0] -= q_ps[ind_coef][1]*dtfm *q_aux[ind_coef][ind_q+2];
-	v[i][0] -= q_ps[ind_coef][2]*dtfm *q_aux[ind_coef][4-ind_q];
-	v[i][0] -= q_ps[ind_coef][3]*dtfm *q_aux[ind_coef][6-ind_q];
+	
+	for (int k = 0; k < aux_terms; k++) {
+	  v[i][0] -= q_ps[ind_coef][4*k]*dtfm *q_aux[ind_coef][8*k+ind_q];
+	  v[i][0] -= q_ps[ind_coef][4*k+1]*dtfm *q_aux[ind_coef][8*k+ind_q+2];
+	  v[i][0] -= q_ps[ind_coef][4*k+2]*dtfm *q_aux[ind_coef][8*k+4-ind_q];
+	  v[i][0] -= q_ps[ind_coef][4*k+3]*dtfm *q_aux[ind_coef][8*k+6-ind_q];
+	}
 	j++;
       }
     }
@@ -234,43 +196,47 @@ void FixGLEPairAux::initial_integrate(int vflag)
   for (int i = 0; i < npair; i++) {
     for (int k = 0; k < aux_terms; k++) {
       for (n=0; n<8; n++) {
-	q_ran[i][n] = random->gaussian();
-	q_save[i][n] = q_aux[i][n];
+	q_ran[i][8*k+n] = random->gaussian();
+	q_save[i][8*k+n] = q_aux[i][8*k+n];
       }
     } 
   }
   
   // Advance Q by dt
   for (int i = 0; i < npair; i++) {
-    // update aux_var, self (s) and cross (c)
-    for (int s=0; s<8; s+=4) {
-      // update a
-      q_aux[i][s] *= q_s[i][0];  
-      q_aux[i][s] -= (1-q_s[i][1])*q_save[i][s+1];  
-      // update b
-      q_aux[i][s+1] *= q_s[i][0];  
-      q_aux[i][s+1] += (1-q_s[i][1])*q_save[i][s];  
-    }
-    for (int c=2; c<8; c+=4) {
-      //update a
-      q_aux[i][c] *= q_s[i][2];  
-      q_aux[i][c] -= (1-q_s[i][3])*q_save[i][c+1];  
-      //update b
-      q_aux[i][c+1] *= q_s[i][2];  
-      q_aux[i][c+1] += (1-q_s[i][3])*q_save[i][c];  
-    }
     
-    
-    // update momenta contribution
-    
-    // update noise
-    for (n=0; n<4; n++) {
-      for (m=0; m<4; m++) {
-	q_aux[i][n] += sqrt(update->dt)*q_B[i][4*n+m]*q_ran[i][m];
-	q_aux[i][n+4] +=  sqrt(update->dt)*q_B[i][4*n+m]*q_ran[i][m+4];
+    for (int k = 0; k < aux_terms; k++) {
+      
+      // update aux_var, self (s) and cross (c)
+      for (int s=0; s<8; s+=4) {
+	// update a
+	q_aux[i][8*k+s] *= q_int[i][4*k];  
+	q_aux[i][8*k+s] -= q_int[i][4*k+1]*q_save[i][8*k+s+1];  
+	// update b
+	q_aux[i][8*k+s+1] *= q_int[i][4*k];  
+	q_aux[i][8*k+s+1] += q_int[i][4*k+1]*q_save[i][8*k+s];  
       }
-    }
+      for (int c=2; c<8; c+=4) {
+	//update a
+	q_aux[i][8*k+c] *= q_int[i][4*k+2];  
+	q_aux[i][8*k+c] -= q_int[i][4*k+3]*q_save[i][8*k+c+1];  
+	//update b
+	q_aux[i][8*k+c+1] *= q_int[i][4*k+2];  
+	q_aux[i][8*k+c+1] += q_int[i][4*k+3]*q_save[i][8*k+c];  
+      }
+    
+    
+      // update momenta contribution
+    
+      // update noise
+      for (n=0; n<4; n++) {
+	for (m=0; m<4; m++) {
+	  q_aux[i][8*k+n] += sqrt(update->dt)*q_B[i][16*k+4*n+m]*q_ran[i][8*k+m];
+	  q_aux[i][8*k+n+4] +=  sqrt(update->dt)*q_B[i][16*k+4*n+m]*q_ran[i][8*k+m+4];
+	}
+      }
 
+    }
     /*for (n=0; n<8; n++) {
       printf("%f ",q_aux[i][n]);
     }
@@ -324,10 +290,12 @@ void FixGLEPairAux::final_integrate()
 	ind_coef = pair_list_coef[i][j];
 	ind_q = ( i < pair_list_part[i][j]) ? 0 : 4;
 	//printf("coef %d, q %d\n",ind_coef, ind_q);
-	v[i][0] -= q_ps[ind_coef][0]*dtfm *q_aux[ind_coef][ind_q];
-	v[i][0] -= q_ps[ind_coef][1]*dtfm *q_aux[ind_coef][ind_q+2];
-	v[i][0] -= q_ps[ind_coef][2]*dtfm *q_aux[ind_coef][4-ind_q];
-	v[i][0] -= q_ps[ind_coef][3]*dtfm *q_aux[ind_coef][6-ind_q];
+	for (int k = 0; k < aux_terms; k++) {
+	  v[i][0] -= q_ps[ind_coef][4*k]*dtfm *q_aux[ind_coef][8*k+ind_q];
+	  v[i][0] -= q_ps[ind_coef][4*k+1]*dtfm *q_aux[ind_coef][8*k+ind_q+2];
+	  v[i][0] -= q_ps[ind_coef][4*k+2]*dtfm *q_aux[ind_coef][8*k+4-ind_q];
+	  v[i][0] -= q_ps[ind_coef][4*k+3]*dtfm *q_aux[ind_coef][8*k+6-ind_q];
+	}
 	j++;
       }
     }
@@ -369,7 +337,45 @@ double FixGLEPairAux::memory_usage()
 
 void FixGLEPairAux::grow_arrays(int nmax)
 {
-  memory->grow(q_aux, nmax,aux_terms*8,"gld:q_aux");
+  memory->grow(q_aux, nmax,aux_terms*8,"gle/pair/aux:q_aux");
+}
+
+/* ----------------------------------------------------------------------
+   read in coefficients
+------------------------------------------------------------------------- */
+void FixGLEPairAux::read_coef_aux()
+{
+  FILE * input;
+  input = fopen("aux_coef.dat","r");
+  fscanf(input,"%d\n\n",&aux_terms);
+  //printf("%d\n",aux_terms);
+
+  if (aux_terms < 0)
+    error->all(FLERR,"Fix gle/pair/aux terms must be > 0");
+  
+  // allocate memory
+  memory->create(q_s, npair,aux_terms*4, "gle/pair/aux:q_s");
+  memory->create(q_ps, npair,aux_terms*4, "gle/pair/aux:q_ps");
+  memory->create(q_B, npair,aux_terms*4*4, "gle/pair/aux:q_B");
+  
+  for (int k=0; k<aux_terms; k++) fscanf(input,"%lf %lf %lf %lf\n",&q_s[0][4*k],&q_s[0][4*k+1],&q_s[0][4*k+2],&q_s[0][4*k+3]);
+  //for (int k=0; k<aux_terms; k++) printf("%lf %lf %lf %lf\n",q_s[0][4*k],q_s[0][4*k+1],q_s[0][4*k+2],q_s[0][4*k+3]);
+  
+  fscanf(input,"\n");
+  
+  for (int k=0; k<aux_terms; k++) fscanf(input,"%lf %lf %lf %lf\n",&q_ps[0][4*k],&q_ps[0][4*k+1],&q_ps[0][4*k+2],&q_ps[0][4*k+3]);
+  //for (int k=0; k<aux_terms; k++) printf("%lf %lf %lf %lf\n",q_ps[0][4*k],q_ps[0][4*k+1],q_ps[0][4*k+2],q_ps[0][4*k+3]);
+  
+  fscanf(input,"\n");
+  
+  for (int k=0; k<aux_terms; k++)
+    for (int n=0; n<4; n++)
+      fscanf(input,"%lf %lf %lf %lf\n",&q_B[0][16*k+4*n],&q_B[0][16*k+4*n+1],&q_B[0][16*k+4*n+2],&q_B[0][16*k+4*n+3]);
+  
+  /*for (int k=0; k<aux_terms; k++)
+    for (int n=0; n<4; n++)
+      printf("%lf %lf %lf %lf\n",q_B[0][16*k+4*n],q_B[0][16*k+4*n+1],q_B[0][16*k+4*n+2],q_B[0][16*k+4*n+3]);*/
+  
 }
 
 /* ----------------------------------------------------------------------
@@ -382,16 +388,34 @@ void FixGLEPairAux::init_q_aux()
   int icoeff;
   double eq_sdev=0.0;
   int n;
+  
+  grow_arrays(npair);
+  memory->create(q_ran, npair,aux_terms*8, "gle/pair/aux:q_ran");
+  memory->create(q_save, npair,aux_terms*8, "gle/pair/aux:q_save");
+  memory->create(q_int, npair,aux_terms*4, "gle/pair/aux:q_int");
 
   // set kT to the temperature in mvvv units
   double kT = (force->boltz)*t_target/(force->mvv2e);
   double scale = sqrt(kT)/(force->ftm2v);
 
   for (int i = 0; i < npair; i++) {
-    for (int n = 0; n < 8; n++) {
-      q_aux[i][n] = 0.0;
+    for (int k = 0; k < aux_terms; k++) {
+      for (int n = 0; n < 8; n++) {
+	q_aux[i][8*k+n] = 0.0;
+      }
     }
   }
+  
+  for (int i = 0; i < npair; i++) {
+    for (int k = 0; k < aux_terms; k++) {
+      q_int[i][4*k]=exp(-update->dt*q_s[i][4*k])*cos(update->dt*q_s[i][4*k+1]);
+      q_int[i][4*k+1]=exp(-update->dt*q_s[i][4*k])*sin(update->dt*q_s[i][4*k+1]);
+      q_int[i][4*k+2]=exp(-update->dt*q_s[i][4*k+2])*cos(update->dt*q_s[i][4*k+3]);
+      q_int[i][4*k+3]=exp(-update->dt*q_s[i][4*k+2])*sin(update->dt*q_s[i][4*k+3]);
+    }
+  }
+  
+  
 
   return;
 }

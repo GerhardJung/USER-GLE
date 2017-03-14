@@ -52,7 +52,6 @@ FixGLEPairAux::FixGLEPairAux(LAMMPS *lmp, int narg, char **arg) :
   nevery = 1;
   peratom_freq = 1;
   vector_flag = 1;
-  size_vector = 2*aux_terms*atom->nlocal;
 
   int narg_min = 5;
   if (narg < narg_min) error->all(FLERR,"Illegal fix gle/pair/aux command");
@@ -196,10 +195,8 @@ void FixGLEPairAux::initial_integrate(int vflag)
       // update momenta contribution (for memory)
     
       // update noise
-      q_aux[i][2*k] += q_B[4*k]*q_ran[i][2*k];
-      q_aux[i][2*k] += q_B[4*k+1]*q_ran[i][2*k+1];
-      q_aux[i][2*k+1] += q_B[4*k+2]*q_ran[i][2*k];
-      q_aux[i][2*k+1] += q_B[4*k+3]*q_ran[i][2*k+1];
+      q_aux[i][2*k] += q_B[k]*q_ran[i][2*k];
+      q_aux[i][2*k+1] += q_B[k]*q_ran[i][2*k+1];
     }
     /*for (n=0; n<8; n++) {
       printf("%f ",q_aux[i][n]);
@@ -265,8 +262,9 @@ void FixGLEPairAux::final_integrate()
 
 double FixGLEPairAux::compute_vector(int n)
 {
-  int j = n%8;
-  int i = (n - j)/8;
+  int nlocal = atom->nlocal;
+  int j = n%(2*nlocal);
+  int i = (n - j)/(2*nlocal);
   
   return q_aux[i][j];
 }
@@ -306,12 +304,13 @@ void FixGLEPairAux::read_coef_aux()
 
   if (aux_terms < 0)
     error->all(FLERR,"Fix gle/pair/aux terms must be > 0");
+  size_vector = 2*aux_terms*atom->nlocal;
   
   // allocate memory
   memory->create(q_s, aux_terms*2, "gle/pair/aux:q_s");
   memory->create(q_As, aux_terms, "gle/pair/aux:q_As");
   memory->create(q_Ac, aux_terms, "gle/pair/aux:q_Ac");
-  memory->create(q_B, aux_terms*2*2, "gle/pair/aux:q_B");
+  memory->create(q_B, aux_terms, "gle/pair/aux:q_B");
   
   // read time constants
   fscanf(input,"Time constants\n");
@@ -369,13 +368,7 @@ void FixGLEPairAux::init_q_aux()
   
   // CholDecomp[Css-exp(-dt*Ass)*Css*exp(-dt*Ass^T)] (hard coded)
   for (int k = 0; k < aux_terms; k++) {
-    double exp_const = exp(-2.0*update->dt*q_s[2*k]);
-    double cos_const = cos(update->dt*q_s[2*k+1]);
-    double sin_const = sin(update->dt*q_s[2*k+1]);
-    q_B[4*k]=sqrt(1-exp_const*cos_const*cos_const);
-    q_B[4*k+1]=0.0;
-    q_B[4*k+2]=exp_const*sin_const*sin_const/sqrt(1.0-exp_const*cos_const*cos_const);
-    q_B[4*k+3]=sqrt(2.0)*sqrt(((1.0-exp_const*cos_const)*(exp_const-1.0))/(1.0-2.0/exp_const+cos_const));
+    q_B[k]=sqrt(1-exp(-2.0*update->dt*q_s[2*k]));
   }
   
   // CholDecomp to determine Aps (on the fly)

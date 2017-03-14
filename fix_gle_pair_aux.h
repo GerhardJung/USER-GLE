@@ -21,6 +21,7 @@ FixStyle(gle/pair/aux,FixGLEPairAux)
 #define LMP_FIX_GLE_PAIR_AUX_H
 
 #include "fix.h"
+#include <Eigen/Dense>
 
 namespace LAMMPS_NS {
 
@@ -45,10 +46,6 @@ class FixGLEPairAux : public Fix {
 
   int aux_terms;
   
-  int npair;
-  int **pair_list_part;
-  int **pair_list_coef;
-
   double **q_aux;
   double **q_ran;
   double **q_save;
@@ -56,12 +53,17 @@ class FixGLEPairAux : public Fix {
   class RanMars *random;
   
   // input
-  double **q_B;
-  double **q_ps;
-  double **q_s;
+  double *q_s;
+  double *q_As;
+  double *q_Ac;
+  double *q_B;
   
   // matrix exp
-  double **q_int;
+  double *q_int;
+  
+  // cholsky decomp
+  Eigen::MatrixXd *A;
+  Eigen::MatrixXd *lltA;
   
   double *v_step;
   double *f_step;

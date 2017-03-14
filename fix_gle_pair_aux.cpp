@@ -32,9 +32,13 @@
 #include "memory.h"
 #include "error.h"
 #include "group.h"
+#include <iostream>
 
 using namespace LAMMPS_NS;
 using namespace FixConst;
+using namespace std;
+using namespace Eigen;
+
 
 /* ----------------------------------------------------------------------
    Parses parameters passed to the method, allocates some memory
@@ -43,13 +47,12 @@ using namespace FixConst;
 FixGLEPairAux::FixGLEPairAux(LAMMPS *lmp, int narg, char **arg) :
   Fix(lmp, narg, arg)
 {
-  npair=1;
   
   global_freq = 1;
   nevery = 1;
   peratom_freq = 1;
   vector_flag = 1;
-  size_vector = 8*npair;
+  size_vector = 2*aux_terms*atom->nlocal;
 
   int narg_min = 5;
   if (narg < narg_min) error->all(FLERR,"Illegal fix gle/pair/aux command");
@@ -57,24 +60,11 @@ FixGLEPairAux::FixGLEPairAux(LAMMPS *lmp, int narg, char **arg) :
   t_target = force->numeric(FLERR,arg[3]);
   
   int seed = force->inumeric(FLERR,arg[4]);
- 
   
   // Error checking for the first set of required input arguments
   if (seed <= 0) error->all(FLERR,"Illegal fix gle/pair/aux command");
   if (t_target < 0)
     error->all(FLERR,"Fix gle/pair/aux temperature must be >= 0");
-  
-  // allocate memory for Prony series extended variables
-  memory->create(pair_list_part, atom->nlocal,atom->nlocal, "gle/pair/aux:pair_list_part");
-  memory->create(pair_list_coef, atom->nlocal,atom->nlocal, "gle/pair/aux:pair_list_coef");
-  pair_list_part[0][0]=1;
-  pair_list_part[0][1]=-1;
-  pair_list_part[1][0]=0;
-  pair_list_part[1][1]=-1;
-  pair_list_coef[0][0]=0;
-  pair_list_coef[0][1]=-1;
-  pair_list_coef[1][0]=0;
-  pair_list_coef[1][1]=-1;
   
   q_aux = NULL;
   read_coef_aux();
@@ -98,12 +88,12 @@ FixGLEPairAux::~FixGLEPairAux()
 {
   delete random;
   memory->destroy(q_aux);
-  memory->destroy(pair_list_part);
-  memory->destroy(pair_list_coef);
   memory->destroy(q_ran);
   memory->destroy(q_save);
   memory->destroy(q_B);
-  memory->destroy(q_ps);
+  memory->destroy(q_As);
+  memory->destroy(q_Ac);
+
 
 }
 
@@ -143,7 +133,7 @@ void FixGLEPairAux::initial_integrate(int vflag)
   double theta_qss, theta_qsc, theta_qcs, theta_qcc11, theta_qcc12;
   double theta_qsps, theta_qspc;
   int ind_coef, ind_q=0;
-  int j,s,c,n,m;
+  int s,c,n,m;
 
   // update v and x of atoms in group
   double **x = atom->x;
@@ -169,20 +159,12 @@ void FixGLEPairAux::initial_integrate(int vflag)
       meff = mass[type[i]];   
       dtfm = dtf / mass[type[i]];
       //v[i][0] += dtfm * f_step[i];
-      j = 0;
-      while (pair_list_part[i][j]!=-1) {
-	ind_coef = pair_list_coef[i][j];
-	ind_q = ( i < pair_list_part[i][j]) ? 0 : 4;
-	//printf("coef %d, q %d\n",ind_coef, ind_q);
-	
+      for (int j = 0; j < nlocal; j++) {
 	for (int k = 0; k < aux_terms; k++) {
-	  v[i][0] -= q_ps[ind_coef][4*k]*dtfm *q_aux[ind_coef][8*k+ind_q];
-	  v[i][0] -= q_ps[ind_coef][4*k+1]*dtfm *q_aux[ind_coef][8*k+ind_q+2];
-	  v[i][0] -= q_ps[ind_coef][4*k+2]*dtfm *q_aux[ind_coef][8*k+4-ind_q];
-	  v[i][0] -= q_ps[ind_coef][4*k+3]*dtfm *q_aux[ind_coef][8*k+6-ind_q];
+	  v[i][0] -= lltA[k](i,j)*dtfm *q_aux[j][2*k+1];
 	}
-	j++;
       }
+
     }
   }
 
@@ -193,49 +175,31 @@ void FixGLEPairAux::initial_integrate(int vflag)
     }
   }
 
-  for (int i = 0; i < npair; i++) {
+  for (int i = 0; i < nlocal; i++) {
     for (int k = 0; k < aux_terms; k++) {
-      for (n=0; n<8; n++) {
-	q_ran[i][8*k+n] = random->gaussian();
-	q_save[i][8*k+n] = q_aux[i][8*k+n];
-      }
+      q_ran[i][2*k] = random->gaussian();
+      q_save[i][2*k] = q_aux[i][2*k];
+      q_ran[i][2*k+1] = random->gaussian();
+      q_save[i][2*k+1] = q_aux[i][2*k+1];
     } 
   }
   
   // Advance Q by dt
-  for (int i = 0; i < npair; i++) {
-    
+  for (int i = 0; i < nlocal; i++) {
     for (int k = 0; k < aux_terms; k++) {
+      // update aux_var, self and cross
+      q_aux[i][2*k] *= q_int[2*k];  
+      q_aux[i][2*k] += q_int[2*k+1]*q_save[i][2*k+1];  
+      q_aux[i][2*k+1] *= q_int[2*k];  
+      q_aux[i][2*k+1] -= q_int[2*k+1]*q_save[i][2*k];  
       
-      // update aux_var, self (s) and cross (c)
-      for (int s=0; s<8; s+=4) {
-	// update a
-	q_aux[i][8*k+s] *= q_int[i][4*k];  
-	q_aux[i][8*k+s] -= q_int[i][4*k+1]*q_save[i][8*k+s+1];  
-	// update b
-	q_aux[i][8*k+s+1] *= q_int[i][4*k];  
-	q_aux[i][8*k+s+1] += q_int[i][4*k+1]*q_save[i][8*k+s];  
-      }
-      for (int c=2; c<8; c+=4) {
-	//update a
-	q_aux[i][8*k+c] *= q_int[i][4*k+2];  
-	q_aux[i][8*k+c] -= q_int[i][4*k+3]*q_save[i][8*k+c+1];  
-	//update b
-	q_aux[i][8*k+c+1] *= q_int[i][4*k+2];  
-	q_aux[i][8*k+c+1] += q_int[i][4*k+3]*q_save[i][8*k+c];  
-      }
-    
-    
-      // update momenta contribution
+      // update momenta contribution (for memory)
     
       // update noise
-      for (n=0; n<4; n++) {
-	for (m=0; m<4; m++) {
-	  q_aux[i][8*k+n] += sqrt(update->dt)*q_B[i][16*k+4*n+m]*q_ran[i][8*k+m];
-	  q_aux[i][8*k+n+4] +=  sqrt(update->dt)*q_B[i][16*k+4*n+m]*q_ran[i][8*k+m+4];
-	}
-      }
-
+      q_aux[i][2*k] += q_B[4*k]*q_ran[i][2*k];
+      q_aux[i][2*k] += q_B[4*k+1]*q_ran[i][2*k+1];
+      q_aux[i][2*k+1] += q_B[4*k+2]*q_ran[i][2*k];
+      q_aux[i][2*k+1] += q_B[4*k+3]*q_ran[i][2*k+1];
     }
     /*for (n=0; n<8; n++) {
       printf("%f ",q_aux[i][n]);
@@ -260,8 +224,6 @@ void FixGLEPairAux::final_integrate()
   double meff;
   double theta_vs, alpha_vs, theta_vc, alpha_vc;
   int ind_coef, ind_q;
-  int j;
-
 
   // update v and x of atoms in group
   double **v = atom->v;
@@ -271,9 +233,6 @@ void FixGLEPairAux::final_integrate()
   int *mask = atom->mask;
   int nlocal = atom->nlocal;
   if (igroup == atom->firstgroup) nlocal = atom->nfirst;
-
-  // set kT to the temperature in mvvv units
-  double kT = (force->boltz)*t_target/(force->mvv2e);
   
   // save velocity for cross time integration
   for ( int i=0; i< nlocal; i++) f_step[i] = f[i][0];
@@ -285,23 +244,15 @@ void FixGLEPairAux::final_integrate()
       meff = mass[type[i]];   
       dtfm = dtf / mass[type[i]];
       //v[i][0] += dtfm * f_step[i];
-      j = 0;
-      while (pair_list_part[i][j]!=-1) {
-	ind_coef = pair_list_coef[i][j];
-	ind_q = ( i < pair_list_part[i][j]) ? 0 : 4;
-	//printf("coef %d, q %d\n",ind_coef, ind_q);
+      for (int j = 0; j < nlocal; j++) {
 	for (int k = 0; k < aux_terms; k++) {
-	  v[i][0] -= q_ps[ind_coef][4*k]*dtfm *q_aux[ind_coef][8*k+ind_q];
-	  v[i][0] -= q_ps[ind_coef][4*k+1]*dtfm *q_aux[ind_coef][8*k+ind_q+2];
-	  v[i][0] -= q_ps[ind_coef][4*k+2]*dtfm *q_aux[ind_coef][8*k+4-ind_q];
-	  v[i][0] -= q_ps[ind_coef][4*k+3]*dtfm *q_aux[ind_coef][8*k+6-ind_q];
+	  v[i][0] -= lltA[k](i,j)*dtfm *q_aux[j][2*k+1];
 	}
-	j++;
       }
+
     }
   }
  
-  
   for (int i = 0; i < nlocal; i++) {
     f[i][0]=(v[i][0]-v_step[i])/update->dt*mass[type[i]];
   }
@@ -327,7 +278,7 @@ double FixGLEPairAux::compute_vector(int n)
 
 double FixGLEPairAux::memory_usage()
 {
-  double bytes = atom->nlocal*atom->nlocal*aux_terms*sizeof(double);
+  double bytes = atom->nlocal*2*aux_terms*sizeof(double);
   return bytes;
 }
 
@@ -337,7 +288,7 @@ double FixGLEPairAux::memory_usage()
 
 void FixGLEPairAux::grow_arrays(int nmax)
 {
-  memory->grow(q_aux, nmax,aux_terms*8,"gle/pair/aux:q_aux");
+  memory->grow(q_aux, nmax,aux_terms*2,"gle/pair/aux:q_aux");
 }
 
 /* ----------------------------------------------------------------------
@@ -346,35 +297,41 @@ void FixGLEPairAux::grow_arrays(int nmax)
 void FixGLEPairAux::read_coef_aux()
 {
   FILE * input;
+  
+  // read number of auxilliary variables
   input = fopen("aux_coef.dat","r");
-  fscanf(input,"%d\n\n",&aux_terms);
+  fscanf(input,"Auxilliary variables\n");
+  fscanf(input,"N\n%d\n",&aux_terms);
   //printf("%d\n",aux_terms);
 
   if (aux_terms < 0)
     error->all(FLERR,"Fix gle/pair/aux terms must be > 0");
   
   // allocate memory
-  memory->create(q_s, npair,aux_terms*4, "gle/pair/aux:q_s");
-  memory->create(q_ps, npair,aux_terms*4, "gle/pair/aux:q_ps");
-  memory->create(q_B, npair,aux_terms*4*4, "gle/pair/aux:q_B");
+  memory->create(q_s, aux_terms*2, "gle/pair/aux:q_s");
+  memory->create(q_As, aux_terms, "gle/pair/aux:q_As");
+  memory->create(q_Ac, aux_terms, "gle/pair/aux:q_Ac");
+  memory->create(q_B, aux_terms*2*2, "gle/pair/aux:q_B");
   
-  for (int k=0; k<aux_terms; k++) fscanf(input,"%lf %lf %lf %lf\n",&q_s[0][4*k],&q_s[0][4*k+1],&q_s[0][4*k+2],&q_s[0][4*k+3]);
-  //for (int k=0; k<aux_terms; k++) printf("%lf %lf %lf %lf\n",q_s[0][4*k],q_s[0][4*k+1],q_s[0][4*k+2],q_s[0][4*k+3]);
+  // read time constants
+  fscanf(input,"Time constants\n");
+  fscanf(input,"q r\n");
+  for (int k=0; k<aux_terms; k++) fscanf(input,"%lf %lf\n",&q_s[2*k],&q_s[2*k+1]);
+  //for (int k=0; k<aux_terms; k++) printf("%lf %lf\n",q_s[2*k],q_s[2*k+1]);
   
-  fscanf(input,"\n");
+  // read self amplitudes
+  fscanf(input,"Self amplitudes\n");
+  for (int k=0; k<aux_terms; k++) fscanf(input,"%lf ",&q_As[k]);
+  //for (int k=0; k<aux_terms; k++) printf("%lf ",q_As[k]);
+  //printf("\n");
   
-  for (int k=0; k<aux_terms; k++) fscanf(input,"%lf %lf %lf %lf\n",&q_ps[0][4*k],&q_ps[0][4*k+1],&q_ps[0][4*k+2],&q_ps[0][4*k+3]);
-  //for (int k=0; k<aux_terms; k++) printf("%lf %lf %lf %lf\n",q_ps[0][4*k],q_ps[0][4*k+1],q_ps[0][4*k+2],q_ps[0][4*k+3]);
-  
-  fscanf(input,"\n");
-  
-  for (int k=0; k<aux_terms; k++)
-    for (int n=0; n<4; n++)
-      fscanf(input,"%lf %lf %lf %lf\n",&q_B[0][16*k+4*n],&q_B[0][16*k+4*n+1],&q_B[0][16*k+4*n+2],&q_B[0][16*k+4*n+3]);
-  
-  /*for (int k=0; k<aux_terms; k++)
-    for (int n=0; n<4; n++)
-      printf("%lf %lf %lf %lf\n",q_B[0][16*k+4*n],q_B[0][16*k+4*n+1],q_B[0][16*k+4*n+2],q_B[0][16*k+4*n+3]);*/
+  // read cross amplitudes
+  fscanf(input,"\nCross amplitudes\n");
+  for (int k=0; k<aux_terms; k++) fscanf(input,"%lf ",&q_Ac[k]);
+  //for (int k=0; k<aux_terms; k++) printf("%lf ",q_Ac[k]);
+  //printf("\n");
+
+  fclose(input);
   
 }
 
@@ -385,37 +342,74 @@ void FixGLEPairAux::read_coef_aux()
 
 void FixGLEPairAux::init_q_aux()
 {
-  int icoeff;
-  double eq_sdev=0.0;
-  int n;
   
-  grow_arrays(npair);
-  memory->create(q_ran, npair,aux_terms*8, "gle/pair/aux:q_ran");
-  memory->create(q_save, npair,aux_terms*8, "gle/pair/aux:q_save");
-  memory->create(q_int, npair,aux_terms*4, "gle/pair/aux:q_int");
+  int nlocal = atom->nlocal;
+  
+  // allocate memory
+  grow_arrays(atom->nlocal);
+  memory->create(q_ran, atom->nlocal,aux_terms*2, "gle/pair/aux:q_ran");
+  memory->create(q_save, atom->nlocal,aux_terms*2, "gle/pair/aux:q_save");
+  memory->create(q_int, aux_terms*2, "gle/pair/aux:q_int");
 
-  // set kT to the temperature in mvvv units
-  double kT = (force->boltz)*t_target/(force->mvv2e);
-  double scale = sqrt(kT)/(force->ftm2v);
-
-  for (int i = 0; i < npair; i++) {
+  // initialize auxilliary variables
+  for (int i = 0; i < atom->nlocal; i++) {
     for (int k = 0; k < aux_terms; k++) {
-      for (int n = 0; n < 8; n++) {
-	q_aux[i][8*k+n] = 0.0;
+      for (int n=0; n<2; n++) {
+	q_aux[i][2*k+n] = 0.0;
       }
     }
   }
   
-  for (int i = 0; i < npair; i++) {
-    for (int k = 0; k < aux_terms; k++) {
-      q_int[i][4*k]=exp(-update->dt*q_s[i][4*k])*cos(update->dt*q_s[i][4*k+1]);
-      q_int[i][4*k+1]=exp(-update->dt*q_s[i][4*k])*sin(update->dt*q_s[i][4*k+1]);
-      q_int[i][4*k+2]=exp(-update->dt*q_s[i][4*k+2])*cos(update->dt*q_s[i][4*k+3]);
-      q_int[i][4*k+3]=exp(-update->dt*q_s[i][4*k+2])*sin(update->dt*q_s[i][4*k+3]);
+  // calculate integration constants
+  // exp(-dt*Ass)
+  for (int k = 0; k < aux_terms; k++) {
+    q_int[2*k]=exp(-update->dt*q_s[2*k])*cos(update->dt*q_s[2*k+1]);
+    q_int[2*k+1]=exp(-update->dt*q_s[2*k])*sin(update->dt*q_s[2*k+1]);
+  }
+  
+  // CholDecomp[Css-exp(-dt*Ass)*Css*exp(-dt*Ass^T)] (hard coded)
+  for (int k = 0; k < aux_terms; k++) {
+    double exp_const = exp(-2.0*update->dt*q_s[2*k]);
+    double cos_const = cos(update->dt*q_s[2*k+1]);
+    double sin_const = sin(update->dt*q_s[2*k+1]);
+    q_B[4*k]=sqrt(1-exp_const*cos_const*cos_const);
+    q_B[4*k+1]=0.0;
+    q_B[4*k+2]=exp_const*sin_const*sin_const/sqrt(1.0-exp_const*cos_const*cos_const);
+    q_B[4*k+3]=sqrt(2.0)*sqrt(((1.0-exp_const*cos_const)*(exp_const-1.0))/(1.0-2.0/exp_const+cos_const));
+  }
+  
+  // CholDecomp to determine Aps (on the fly)
+  // initialize matrices
+  A = new MatrixXd[aux_terms];
+  lltA = new MatrixXd[aux_terms];
+  for (int k = 0; k < aux_terms; k++) {
+    A[k] = MatrixXd::Zero(nlocal,nlocal);
+  }
+  for (int k = 0; k < aux_terms; k++) {
+    for (int i = 0; i < nlocal; i++) {
+      for (int j = 0; j < nlocal; j++) {
+	if (i==j) {
+	  A[k](i,j)=q_As[k];
+	} else {
+	  A[k](i,j)=q_Ac[k];
+	}
+      }
     }
   }
   
-  
+  // perform cholesky decomposition
+  for (int k = 0; k < aux_terms; k++) {
+    //cout << "The matrix A is" << endl << A[k] << endl;
+    LLT<MatrixXd> lltA_comp(A[k]); // compute the Cholesky decomposition of A
+    lltA[k] = lltA_comp.matrixL(); // retrieve factor L  in the decomposition
+    // The previous two lines can also be written as "L = A.llt().matrixL()"
+    //cout << "The Cholesky factor L is" << endl << lltA[k] << endl;
+    //cout << "To check this, let us compute L * L.transpose()" << endl;
+    //cout << lltA[k] * lltA[k].transpose() << endl;
+    //cout << "This should equal the matrix A" << endl;
+    //printf("%f\n",lltA[k](0,0));
+  }
 
-  return;
+  
+  
 }

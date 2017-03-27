@@ -73,6 +73,9 @@ class FixAveCorrelateLong : public Fix {
 
   int npair;           // number of correlation pairs to calculate
   double *values;
+  
+  int bins;
+  double rmin,rmax;
 
   void accumulate();
   void evaluate();

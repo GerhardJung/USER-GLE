@@ -39,7 +39,7 @@ using namespace LAMMPS_NS;
 using namespace FixConst;
 
 enum{COMPUTE,FIX,VARIABLE};
-enum{AUTO,UPPER,LOWER,AUTOUPPER,AUTOLOWER,FULL};
+enum{AUTO,UPPER,LOWER,AUTOUPPER,AUTOLOWER,FULL,CROSS};
 
 #define INVOKED_SCALAR 1
 #define INVOKED_VECTOR 2
@@ -103,6 +103,8 @@ FixAveCorrelateLong::FixAveCorrelateLong(LAMMPS * lmp, int narg, char **arg):
   // optional args
 
   type = AUTO;
+  bins = 0;
+  rmin = rmax = 0.0;
   startstep = 0;
   fp = NULL;
   overwrite = 0;
@@ -122,6 +124,15 @@ FixAveCorrelateLong::FixAveCorrelateLong(LAMMPS * lmp, int narg, char **arg):
       else if (strcmp(arg[iarg+1],"auto/upper") == 0) type = AUTOUPPER;
       else if (strcmp(arg[iarg+1],"auto/lower") == 0) type = AUTOLOWER;
       else if (strcmp(arg[iarg+1],"full") == 0) type = FULL;
+      else if (strcmp(arg[iarg+1],"cross") == 0) {
+	type = CROSS;
+	if (iarg+5 > narg)
+        error->all(FLERR,"Illegal fix ave/correlate/long command");
+	bins = force->inumeric(FLERR,arg[iarg+2]);
+	rmin = force->numeric(FLERR,arg[iarg+3]);
+	rmax = force->numeric(FLERR,arg[iarg+4]);
+	iarg += 3;
+      }
       else error->all(FLERR,"Illegal fix ave/correlate/long command");
       iarg += 2;
     } else if (strcmp(arg[iarg],"start") == 0) {
@@ -607,6 +618,7 @@ void FixAveCorrelateLong::add(const int i, const double w, const unsigned int k)
     int ind2=ind1;
     for (unsigned int j=0;j<p;++j) {
       if (shift[i][k][ind2] > -1e10) {
+	//printf("%d %f\n",k,shift[i][k][ind1]*shift[i][k][ind2]);
         correlation[i][k][j]+= shift[i][k][ind1]*shift[i][k][ind2];
 	dcorrelation[i][k][j]+= shift[i][k][ind1]*shift[i][k][ind2]*shift[i][k][ind1]*shift[i][k][ind2];
         if (i==0) ++ncorrelation[k][j];
@@ -619,6 +631,7 @@ void FixAveCorrelateLong::add(const int i, const double w, const unsigned int k)
     for (unsigned int j=dmin;j<p;++j) {
       if (ind2<0) ind2+=p;
       if (shift[i][k][ind2] > -1e10) {
+	//printf("%d %f\n",k,shift[i][k][ind1]*shift[i][k][ind2]);
         correlation[i][k][j]+= shift[i][k][ind1]*shift[i][k][ind2];
 	dcorrelation[i][k][j]+= shift[i][k][ind1]*shift[i][k][ind2]*shift[i][k][ind1]*shift[i][k][ind2];
         if (i==0) ++ncorrelation[k][j];
@@ -660,6 +673,7 @@ void FixAveCorrelateLong::add(const int i, const double wA, const double wB,
     int ind2=ind1;
     for (unsigned int j=0;j<p;++j) {
       if (shift[i][k][ind2] > -1e10) {
+	//printf("%d %f %f\n",j,shift[i][k][ind1],shift2[i][k][ind2]);
         correlation[i][k][j]+= shift[i][k][ind1]*shift2[i][k][ind2];
 	dcorrelation[i][k][j]+= shift[i][k][ind1]*shift2[i][k][ind2]*shift[i][k][ind1]*shift2[i][k][ind2];
         if (i==0) ++ncorrelation[k][j];
@@ -673,6 +687,7 @@ void FixAveCorrelateLong::add(const int i, const double wA, const double wB,
     for (unsigned int j=dmin;j<p;++j) {
       if (ind2<0) ind2+=p;
       if (shift[i][k][ind2] > -1e10) {
+	//printf("%d %f %f\n",j,shift[i][k][ind1],shift2[i][k][ind2]);
         correlation[i][k][j]+= shift[i][k][ind1]*shift2[i][k][ind2];
 	dcorrelation[i][k][j]+= shift[i][k][ind1]*shift2[i][k][ind2]*shift[i][k][ind1]*shift2[i][k][ind2];
         if (i==0) ++ncorrelation[k][j];

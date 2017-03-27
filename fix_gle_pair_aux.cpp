@@ -60,6 +60,14 @@ FixGLEPairAux::FixGLEPairAux(LAMMPS *lmp, int narg, char **arg) :
   
   int seed = force->inumeric(FLERR,arg[4]);
   
+  // read number of auxilliary variables
+  input = fopen(arg[5],"r");
+  if (input == NULL) {
+    char str[128];
+    sprintf(str,"Cannot open fix gle/pair/aux file %s",arg[5]);
+    error->one(FLERR,str);
+  }
+  
   // Error checking for the first set of required input arguments
   if (seed <= 0) error->all(FLERR,"Illegal fix gle/pair/aux command");
   if (t_target < 0)
@@ -92,7 +100,8 @@ FixGLEPairAux::~FixGLEPairAux()
   memory->destroy(q_B);
   memory->destroy(q_As);
   memory->destroy(q_Ac);
-
+  memory->destroy(q_ints);
+  memory->destroy(q_intv);
 
 }
 
@@ -143,9 +152,6 @@ void FixGLEPairAux::initial_integrate(int vflag)
   int *mask = atom->mask;
   int nlocal = atom->nlocal;
   if (igroup == atom->firstgroup) nlocal = atom->nfirst;
-
-  // set kT to the temperature in mvvv units
-  double kT = (force->boltz)*t_target/(force->mvv2e);
   
   // save velocity for cross time integration
   for ( int i=0; i< nlocal; i++) v_save[i] = v[i][0];
@@ -187,12 +193,18 @@ void FixGLEPairAux::initial_integrate(int vflag)
   for (int i = 0; i < nlocal; i++) {
     for (int k = 0; k < aux_terms; k++) {
       // update aux_var, self and cross
-      q_aux[i][2*k] *= q_int[2*k];  
-      q_aux[i][2*k] += q_int[2*k+1]*q_save[i][2*k+1];  
-      q_aux[i][2*k+1] *= q_int[2*k];  
-      q_aux[i][2*k+1] -= q_int[2*k+1]*q_save[i][2*k];  
+      q_aux[i][2*k] *= q_ints[2*k];  
+      q_aux[i][2*k] += q_ints[2*k+1]*q_save[i][2*k+1];  
+      q_aux[i][2*k+1] *= q_ints[2*k];  
+      q_aux[i][2*k+1] -= q_ints[2*k+1]*q_save[i][2*k];  
       
       // update momenta contribution (for memory)
+      for (int j = 0; j < nlocal; j++) {
+	if (mask[j] & groupbit) {
+	  q_aux[i][2*k] += q_intv[2*k]*lltA[k](j,i)*v[j][0]; 
+	  q_aux[i][2*k+1] += q_intv[2*k+1]*lltA[k](j,i)*v[j][0]; 
+	}
+      }
     
       // update noise
       q_aux[i][2*k] += q_B[k]*q_ran[i][2*k];
@@ -251,7 +263,12 @@ void FixGLEPairAux::final_integrate()
   }
  
   for (int i = 0; i < nlocal; i++) {
-    f[i][0]=(v[i][0]-v_step[i])/update->dt*mass[type[i]];
+    f[i][0]=0.0;
+    for (int j = 0; j < nlocal; j++) {
+      for (int k = 0; k < aux_terms; k++) {
+	f[i][0]+=lltA[k](i,j) *q_aux[j][2*k+1];
+      }
+    }
   }
 
 }
@@ -294,10 +311,7 @@ void FixGLEPairAux::grow_arrays(int nmax)
 ------------------------------------------------------------------------- */
 void FixGLEPairAux::read_coef_aux()
 {
-  FILE * input;
-  
-  // read number of auxilliary variables
-  input = fopen("aux_coef.dat","r");
+
   fscanf(input,"Auxilliary variables\n");
   fscanf(input,"N\n%d\n",&aux_terms);
   //printf("%d\n",aux_terms);
@@ -332,6 +346,22 @@ void FixGLEPairAux::read_coef_aux()
 
   fclose(input);
   
+  // write out input function
+  FILE * output;
+  output = fopen("memory_output.cor","w");
+  double ts;
+  double sum_self,sum_cross;
+  for (int t=0; t<10000; t++) {
+    sum_self = 0.0;
+    sum_cross = 0.0;
+    ts = t*update->dt;
+    for (int k=0; k<aux_terms; k++) {
+      sum_self += q_As[k]*exp(-q_s[2*k]*ts)*cos(q_s[2*k+1]*ts);
+      sum_cross += q_Ac[k]*exp(-q_s[2*k]*ts)*cos(q_s[2*k+1]*ts);
+    }
+    fprintf(output,"%f %f %f\n",ts,sum_self,sum_cross);
+  }
+  
 }
 
 /* ----------------------------------------------------------------------
@@ -348,7 +378,8 @@ void FixGLEPairAux::init_q_aux()
   grow_arrays(atom->nlocal);
   memory->create(q_ran, atom->nlocal,aux_terms*2, "gle/pair/aux:q_ran");
   memory->create(q_save, atom->nlocal,aux_terms*2, "gle/pair/aux:q_save");
-  memory->create(q_int, aux_terms*2, "gle/pair/aux:q_int");
+  memory->create(q_ints, aux_terms*2, "gle/pair/aux:q_ints");
+  memory->create(q_intv, aux_terms*2, "gle/pair/aux:q_intv");
 
   // initialize auxilliary variables
   for (int i = 0; i < atom->nlocal; i++) {
@@ -362,8 +393,16 @@ void FixGLEPairAux::init_q_aux()
   // calculate integration constants
   // exp(-dt*Ass)
   for (int k = 0; k < aux_terms; k++) {
-    q_int[2*k]=exp(-update->dt*q_s[2*k])*cos(update->dt*q_s[2*k+1]);
-    q_int[2*k+1]=exp(-update->dt*q_s[2*k])*sin(update->dt*q_s[2*k+1]);
+    q_ints[2*k]=exp(-update->dt*q_s[2*k])*cos(update->dt*q_s[2*k+1]);
+    q_ints[2*k+1]=exp(-update->dt*q_s[2*k])*sin(update->dt*q_s[2*k+1]);
+  }
+  
+  // calculate integration constants
+  // Ass^(-1)*(1-exp(-dt*Ass))
+  for (int k = 0; k < aux_terms; k++) {
+    q_intv[2*k]= -q_s[2*k+1]*(1.0-q_ints[2*k])/(q_s[2*k]*q_s[2*k]+q_s[2*k+1]*q_s[2*k+1])+q_s[2*k]*q_ints[2*k+1]/(q_s[2*k]*q_s[2*k]+q_s[2*k+1]*q_s[2*k+1]);
+    q_intv[2*k+1]=q_s[2*k]*(1.0-q_ints[2*k])/(q_s[2*k]*q_s[2*k]+q_s[2*k+1]*q_s[2*k+1])+q_s[2*k+1]*q_ints[2*k+1]/(q_s[2*k]*q_s[2*k]+q_s[2*k+1]*q_s[2*k+1]);
+    printf("%f %f\n",q_intv[2*k],q_intv[2*k+1]);
   }
   
   // CholDecomp[Css-exp(-dt*Ass)*Css*exp(-dt*Ass^T)] (hard coded)

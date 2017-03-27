@@ -57,6 +57,7 @@ class FixAveCorrelatePeratom : public Fix {
 
   int type,ave,startstep,overwrite, dynamics, memory_switch, variable_flag;
   int include_orthogonal;
+  int cross_flag;
   double prefactor;
   
   int *cor_groupbit, *cor_valbit;

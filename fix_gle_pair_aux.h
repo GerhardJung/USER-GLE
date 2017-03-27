@@ -44,6 +44,7 @@ class FixGLEPairAux : public Fix {
   double dtv,dtf;
   double t_target;
 
+  FILE * input;
   int aux_terms;
   
   double **q_aux;
@@ -59,7 +60,8 @@ class FixGLEPairAux : public Fix {
   double *q_B;
   
   // matrix exp
-  double *q_int;
+  double *q_ints;
+  double *q_intv;
   
   // cholsky decomp
   Eigen::MatrixXd *A;

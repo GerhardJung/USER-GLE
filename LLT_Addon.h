@@ -70,10 +70,11 @@ LLT_Addon<MatrixType,UpLo> LLT_Addon<MatrixType,UpLo>::vectorUpdate(const Vector
   // calculate M21
   for (Index k=0; k<i; k++ ) {
     RealScalarV y = vec(k);
+    RowXpr rowk = this->m_matrix.row(k);
     for (Index l=0; l<k; l++ ) {
-      y -= row(l)*this->m_matrix(l,k);
+      y -= row(l)*rowk(l);
     }
-    row(k) = y/this->m_matrix(k,k);
+    row(k) = y/rowk(k);
   }
   
 
@@ -87,8 +88,9 @@ LLT_Addon<MatrixType,UpLo> LLT_Addon<MatrixType,UpLo>::vectorUpdate(const Vector
   // calculate M32
   for (Index k=i+1; k<n; k++ ) {
     RealScalarV y = vec(k);
+    RowXpr rowk = this->m_matrix.row(k);
     for (Index l=0; l<i; l++ ) {
-      y -= this->m_matrix(k,l)*row(l);
+      y -= rowk(l)*row(l);
     }
     col(k)=y/row(i);
   }

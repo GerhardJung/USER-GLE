@@ -584,19 +584,34 @@ void Set::set(int keyword)
   }
 
   // loop over selected atoms
-
   AtomVecEllipsoid *avec_ellipsoid =
     (AtomVecEllipsoid *) atom->style_match("ellipsoid");
   AtomVecLine *avec_line = (AtomVecLine *) atom->style_match("line");
   AtomVecTri *avec_tri = (AtomVecTri *) atom->style_match("tri");
   AtomVecBody *avec_body = (AtomVecBody *) atom->style_match("body");
 
+  // determine Nloc
   int nlocal = atom->nlocal;
-  int counter = 1;
-int me=0;
+  int counter = 0, me = 0, counter_scan=0, Nloc;
   MPI_Comm_rank(world,&me);
+  if (N!=-1) {
+    for (int i = 0; i < nlocal; i++) {
+      if (!select[i]) continue;
+      counter++;
+    }
+    MPI_Scan(&counter,&counter_scan,1,MPI_INT, MPI_SUM, world);
+    if (counter_scan <= N) {
+      Nloc = counter;
+    } else {
+      if (counter_scan - counter >= N) Nloc = 0;
+      else Nloc = N - counter_scan + counter;
+    }
+    //printf("%d %d %d %d\n",me,counter,counter_scan,Nloc);
+  }
+  
+  counter = 0;
   for (int i = 0; i < nlocal; i++) {
-    if (!select[i] || ( N != -1 && counter > N) || ( N != -1 && me != 0 ) ) continue;
+    if (!select[i] || ( N != -1 && counter >= Nloc) ) continue;
     counter++;
     // overwrite dvalue, ivalue, xyzw value if variables defined
     // else the input script scalar value remains in place

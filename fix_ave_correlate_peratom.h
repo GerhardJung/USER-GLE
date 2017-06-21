@@ -55,18 +55,11 @@ class FixAveCorrelatePeratom : public Fix {
   
   double **array; //used for peratom quantities
 
-  int type,ave,startstep,overwrite, dynamics, memory_switch, variable_flag;
-  int include_orthogonal;
+  int type,ave,startstep,overwrite, memory_switch, variable_flag;
   int cross_flag;
   double prefactor;
   
-  int *cor_groupbit, *cor_valbit;
-  
-  double **alpha;		//for orthogonal dynamics
-  double **epsilon;
-  double **kappa;
-  double **zeta;
-  double **norm;
+  int *cor_groupbit, *cor_valbit, *cor_group;
   
   int variable_nvalues;		//for variable dependence of the correlation
   int variable_value2index;

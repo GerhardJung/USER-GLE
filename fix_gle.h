@@ -83,6 +83,11 @@ class FixGLE : public Fix {
 
   void compute_target();
   void read_mem_file();
+  
+  int updates_full;
+  double** save_full;
+  int updates_update;
+  double** save_update;
 };
 
 }

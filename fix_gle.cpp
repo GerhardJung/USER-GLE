@@ -135,6 +135,11 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   double *mass = atom->mass;
   gjffac = 1.0/(1.0+mem_kernel[0]*update->dt/2.0/mass[type[0]]);
   gjffac2 = (1.0-mem_kernel[0]*update->dt/2.0/mass[type[0]])*gjffac;
+  
+  updates_full = 0;
+  memory->create(save_full,nmax,3,"fix/gle:save_full");
+  updates_update = 0;
+  memory->create(save_update,nmax,3,"fix/gle:save_update");
 
 }
 
@@ -142,6 +147,8 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
 
 FixGLE::~FixGLE()
 {
+  printf("updates_full: %d\n",updates_full);
+  printf("updates_update: %d\n",updates_update);
 
   //atom->delete_callback(id,0);
   delete random;
@@ -206,7 +213,7 @@ void FixGLE::init()
 void FixGLE::setup(int vflag)
 {
   
-    double **f = atom->f;
+  double **f = atom->f;
 
   int nlocal= atom->nlocal, n,d,m;
   double **x = atom->x;
@@ -221,8 +228,16 @@ void FixGLE::setup(int vflag)
       
       array[n][d]=f[n][d];
     }
-  
-  
+    
+  int *mask = atom->mask;
+  for ( n = 0; n < nlocal; n++) {
+    if (mask[n] & groupbit) {
+      for (d = 0; d<3;d++) {
+	save_full[n][d] = x[n][d];
+	save_update[n][d] = x[n][d];
+      }
+    }
+  }
 }
 
 /* ---------------------------------------------------------------------- */
@@ -287,6 +302,53 @@ void FixGLE::initial_integrate(int vflag)
   if (firstindex_r==2*mem_count-1) firstindex_r=0;
   lastindex_p++;
   if (lastindex_p==mem_count+1) lastindex_p=0;
+  
+  // check if chol has to be updated
+  double delx, dely, delz, rsq;
+  int update = 0;
+  // updates_full
+  for ( n = 0; n < nlocal; n++) {
+    if (mask[n] & groupbit) {
+      delx = save_full[n][0] -x[n][0];
+      dely = save_full[n][1] -x[n][1];
+      delz = save_full[n][2] -x[n][2];
+      domain->minimum_image(delx,dely,delz);
+      rsq = delx*delx + dely*dely + delz*delz;
+      if (rsq > 0.01) {
+	//printf("update!\n");
+	update = 1;
+	updates_full++;
+	break;
+      }
+    }
+  }
+  if (update == 1) {
+    update = 0;
+    for ( n = 0; n < nlocal; n++) {
+      if (mask[n] & groupbit) {
+	for (d = 0; d<3;d++) {
+	  save_full[n][d] = x[n][d];
+	}
+      }
+    }
+  }
+  // update partially
+  for ( n = 0; n < nlocal; n++) {
+    if (mask[n] & groupbit) {
+      delx = save_update[n][0] -x[n][0];
+      dely = save_update[n][1] -x[n][1];
+      delz = save_update[n][2] -x[n][2];
+      domain->minimum_image(delx,dely,delz);
+      rsq = delx*delx + dely*dely + delz*delz;
+      if (rsq > 0.01) {
+	//printf("update!\n");
+	updates_update++;
+	save_update[n][0]=x[n][0];
+	save_update[n][1]=x[n][1];
+	save_update[n][2]=x[n][2];
+      }
+    }
+  }
 
 }
 

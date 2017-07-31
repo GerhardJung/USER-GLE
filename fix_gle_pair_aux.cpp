@@ -361,6 +361,7 @@ void FixGLEPairAux::read_coef_aux()
     }
     fprintf(output,"%f %f %f\n",ts,sum_self,sum_cross);
   }
+  fclose(output);
   
 }
 

@@ -1119,13 +1119,19 @@ void FixAveCorrelatePeratom::end_of_step()
       if (variable_flag == VAR_DEPENDENED) {
 	variable_store[a][lastindex] = group_data[a][nvalues];
       } else if (variable_flag == DIST_DEPENDENED) {
-	int igroup = cor_group[a];
-	double xcm[3];
-	group->xcm(igroup,counter_glo[a],xcm);
-	variable_store[a][lastindex] = xcm[0];
-	variable_store[a][lastindex+nsave] = xcm[1];
-	variable_store[a][lastindex+2*nsave] = xcm[2];
-	//printf("%d %f %f %f\n",a,variable_store[a][lastindex+0*nsave],variable_store[a][lastindex+1*nsave],variable_store[a][lastindex+2*nsave]);
+	if(memory_switch!=GROUP){ 
+	  for (r = 0; r < 3 ; r++) {
+	    variable_store[a][lastindex+r*nsave] = group_data[a][nvalues+r];
+	  }
+	} else {
+	  int igroup = cor_group[a];
+	  double xcm[3];
+	  group->xcm(igroup,counter_glo[a],xcm);
+	  variable_store[a][lastindex] = xcm[0];
+	  variable_store[a][lastindex+nsave] = xcm[1];
+	  variable_store[a][lastindex+2*nsave] = xcm[2];
+	  //printf("%d %f %f %f\n",a,variable_store[a][lastindex+0*nsave],variable_store[a][lastindex+1*nsave],variable_store[a][lastindex+2*nsave]);
+	}
       }
     }
   }
@@ -1192,33 +1198,33 @@ void FixAveCorrelatePeratom::end_of_step()
       if (overwrite) fseek(fp,filepos,SEEK_SET);
       fprintf(fp,BIGINT_FORMAT " %d\n",ntimestep,nrepeat);
       for (i = 0; i < corr_length/factor; i++) {
-    if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED) {
-      int loc_bin = i%bins;
-      int loc_ind = (i - loc_bin)/bins;
-      fprintf(fp,"%d %d %lf %lf",loc_ind+1,loc_ind*nevery,range/bins*loc_bin,save_count[i]);
-    } else {
-      fprintf(fp,"%d %d %lf",i+1,i*nevery,save_count[i]);
-    }
-    if (save_count[i]) {
-      for (j = 0; j < npair; j++)
-        fprintf(fp," %.15lg %g",prefactor*save_corr[i][j]/save_count[i],prefactor*save_corr_err[i][j]/save_count[i]);
-    } else {
-      for (j = 0; j < npair; j++)
-        fprintf(fp," 0.0 0.0");
-    }
-    if (type == AUTOCROSS || variable_flag == DIST_DEPENDENED) {
-      int offset = i + corr_length/2;
-      if (type == AUTOCROSS)
-        fprintf(fp," %lf",save_count[offset]);
-      if (save_count[offset]) {
-        for (j = 0; j < npair; j++)
-          fprintf(fp," %.15lg %g",prefactor*save_corr[offset][j]/save_count[offset],prefactor*save_corr_err[offset][j]/save_count[offset]);
-      } else {
-        for (j = 0; j < npair; j++)
-          fprintf(fp," 0.0");
-      }
-    }
-    fprintf(fp,"\n");
+	if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED) {
+	  int loc_bin = i%bins;
+	  int loc_ind = (i - loc_bin)/bins;
+	  fprintf(fp,"%d %d %lf %lf",loc_ind+1,loc_ind*nevery,range/bins*loc_bin,save_count[i]);
+	} else {
+	  fprintf(fp,"%d %d %lf",i+1,i*nevery,save_count[i]);
+	}
+	if (save_count[i]) {
+	  for (j = 0; j < npair; j++)
+	    fprintf(fp," %.15lg %g",prefactor*save_corr[i][j]/save_count[i],prefactor*save_corr_err[i][j]/save_count[i]);
+	} else {
+	  for (j = 0; j < npair; j++)
+	    fprintf(fp," 0.0 0.0");
+	}
+	if (type == AUTOCROSS || variable_flag == DIST_DEPENDENED) {
+	  int offset = i + corr_length/2;
+	  if (type == AUTOCROSS)
+	    fprintf(fp," %lf",save_count[offset]);
+	  if (save_count[offset]) {
+	    for (j = 0; j < npair; j++)
+	      fprintf(fp," %.15lg %g",prefactor*save_corr[offset][j]/save_count[offset],prefactor*save_corr_err[offset][j]/save_count[offset]);
+	  } else {
+	  for (j = 0; j < npair; j++)
+	    fprintf(fp," 0.0");
+	  }
+	}
+	fprintf(fp,"\n");
       }
       fflush(fp);
       if (overwrite) {
@@ -1389,9 +1395,9 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 		domain->minimum_image(delx,dely,delz);
 		rsq = delx*delx + dely*dely + delz*delz;
 		dist = sqrt (rsq);
-		if(dist < 6.0) {
-		  printf("dist %d %d: %f\n",a,b,dist);
-		}
+		//if(dist < 6.0) {
+		//  printf("dist %d %d: %f\n",a,b,dist);
+		//}
 		if(dist<range){
 		  delx_t = variable_store[inda][m] -variable_store[indb][m];
 		  dely_t = variable_store[inda][m+nsave]-variable_store[indb][m+nsave]  ;
@@ -1756,7 +1762,7 @@ void FixAveCorrelatePeratom::grow_arrays(int nmax) {
 ------------------------------------------------------------------------- */
 
 void FixAveCorrelatePeratom::copy_arrays(int i, int j, int delflag) {
-  int offset= 0;
+  /*int offset= 0;
   for (int m= 0; m < nvalues; m++) {
     for (int k= 0; k < nsample; k++) {
       array[j][offset] = array[i][offset];
@@ -1782,7 +1788,7 @@ void FixAveCorrelatePeratom::copy_arrays(int i, int j, int delflag) {
 	variable_store[j][k+r*nsave]=0.0;
       }
     }
-  }
+  }*/
 }
 
 /* ----------------------------------------------------------------------

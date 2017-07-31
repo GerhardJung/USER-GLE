@@ -134,7 +134,9 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   int *type = atom->type;
   double *mass = atom->mass;
   gjffac = 1.0/(1.0+mem_kernel[0]*update->dt/2.0/mass[type[0]]);
-  gjffac2 = (1.0-mem_kernel[0]*update->dt/2.0/mass[type[0]])*gjffac;
+  gjffac2 = (1.0-mem_kernel[0]*update->dt/2.0/mass[type[0]])*gjffac; 
+  
+  printf("integration: int_a %f, int_b %f mem %f\n",gjffac2,gjffac,mem_kernel[0]);
   
   updates_full = 0;
   memory->create(save_full,nmax,3,"fix/gle:save_full");
@@ -304,6 +306,7 @@ void FixGLE::initial_integrate(int vflag)
   if (lastindex_p==mem_count+1) lastindex_p=0;
   
   // check if chol has to be updated
+  /*
   double delx, dely, delz, rsq;
   int update = 0;
   // updates_full
@@ -348,7 +351,7 @@ void FixGLE::initial_integrate(int vflag)
 	save_update[n][2]=x[n][2];
       }
     }
-  }
+  }*/
 
 }
 

@@ -59,7 +59,7 @@ FixGLEPairJung::FixGLEPairJung(LAMMPS *lmp, int narg, char **arg) :
   MPI_Comm_rank(world,&me);
 
   int narg_min = 5;
-  if (narg < narg_min) error->all(FLERR,"Illegal fix gle/pair/aux command");
+  if (narg < narg_min) error->all(FLERR,"Illegal fix gle/pair/jung command");
 
   t_target = force->numeric(FLERR,arg[3]);
   
@@ -69,15 +69,15 @@ FixGLEPairJung::FixGLEPairJung(LAMMPS *lmp, int narg, char **arg) :
   input = fopen(arg[5],"r");
   if (input == NULL) {
     char str[128];
-    sprintf(str,"Cannot open fix gle/pair/aux file %s",arg[5]);
+    sprintf(str,"Cannot open fix gle/pair/jung file %s",arg[5]);
     error->one(FLERR,str);
   }
   keyword = arg[6];
   
   // Error checking for the first set of required input arguments
-  if (seed <= 0) error->all(FLERR,"Illegal fix gle/pair/aux command");
+  if (seed <= 0) error->all(FLERR,"Illegal fix gle/pair/jung command");
   if (t_target < 0)
-    error->all(FLERR,"Fix gle/pair/aux temperature must be >= 0");
+    error->all(FLERR,"Fix gle/pair/jung temperature must be >= 0");
   
   // Timing
   time_read = 0.0;
@@ -312,7 +312,7 @@ void FixGLEPairJung::initial_integrate(int vflag)
   if (dr_max > dStep*dStep) {
     Nupdate++;
     //printf("Updating amplitudes\n");
-    //update_cholesky();
+    update_cholesky();
     
     // update r_save
     for (int i = 0; i < nlocal; i++) {
@@ -404,7 +404,7 @@ void FixGLEPairJung::final_integrate()
   time_int_rel2 += t2 -t1;
   
       // print timing
-  if (update->nsteps == update->ntimestep || update->ntimestep % 1000000 == 0) {
+  if (update->nsteps == update->ntimestep || update->ntimestep % 10000 == 0) {
     printf("Update %d times\n",Nupdate);
     printf("processor %d: time(read) = %f\n",me,time_read);
     printf("processor %d: time(init) = %f\n",me,time_init);
@@ -583,7 +583,7 @@ void FixGLEPairJung::update_cholesky()
 	  else {
 	    d = (r_step[i][4*(j)+3]- dStart)/dStep;
 	    if (d <= 0) {
-	      error->one(FLERR,"Particles closer than lower cutoff in fix/pair/gle\n");
+	      error->all(FLERR,"Particles closer than lower cutoff in fix/pair/gle\n");
 	      *(A.data() + t*nlocal*nlocal*Nt+(i)*nlocal*Nt+u*nlocal+j) = 0.0;
 	    } else if (d >= Nd) {
 	      *(A.data() + t*nlocal*nlocal*Nt+(i)*nlocal*Nt+u*nlocal+j) = 0.0;
@@ -607,7 +607,7 @@ void FixGLEPairJung::update_cholesky()
   //cout << "The Cholesky factor L is" << endl << Aps[k] << endl;
   //cout << "To check this, let us compute L * L.transpose()" << endl;
   
-  //cout << Aps  << endl;
+  cout << Aps  << endl;
   //cout << "-------"  << endl;
   //cout << Aps * Aps.transpose() << endl;
   //cout << "-------"  << endl;

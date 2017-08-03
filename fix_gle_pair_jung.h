@@ -25,6 +25,8 @@ FixStyle(gle/pair/jung,FixGLEPairJung)
 #include <Eigen/Dense>
 #include <Eigen/Eigen>
 
+#define USE_CHEBYSHEV
+
 namespace LAMMPS_NS {
 
 class FixGLEPairJung : public Fix {

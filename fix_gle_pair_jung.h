@@ -22,8 +22,10 @@ FixStyle(gle/pair/jung,FixGLEPairJung)
 
 #include "fix.h"
 #include <iostream>
+#include <stdlib.h> 
 #include <Eigen/Dense>
 #include <Eigen/Eigen>
+#include <vector>
 
 #define USE_CHEBYSHEV
 
@@ -64,7 +66,7 @@ class FixGLEPairJung : public Fix {
   double *fd;
   double *fr;
   double **x_save;
-  int lastindex;
+  int lastindexN,lastindexn;
   double **r_step;
   double **f_step;
   double **r_save;
@@ -72,8 +74,8 @@ class FixGLEPairJung : public Fix {
   class RanMars *random;
   
   // cholsky decomp
-  Eigen::MatrixXd A;
-  Eigen::MatrixXd Aps;
+  std::vector<Eigen::MatrixXd> A;
+  std::vector<Eigen::MatrixXd> a;
  
   
   // Timing 
@@ -88,6 +90,8 @@ class FixGLEPairJung : public Fix {
   void read_input();
   void update_cholesky();
   void distance_update();
+  void forwardDFT(double *data, std::complex<double> *result);
+  void inverseDFT(std::complex<double> *data, double *result, double *result_imag);
 };
 
 }

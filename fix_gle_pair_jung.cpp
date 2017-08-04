@@ -109,7 +109,7 @@ FixGLEPairJung::FixGLEPairJung(LAMMPS *lmp, int narg, char **arg) :
   int_b = 1.0/(1.0+self_data[0]*update->dt/4.0/mass[type[0]]); // 4.0 because K_0 = 0.5*K(0)
   int_a = (1.0-self_data[0]*update->dt/4.0/mass[type[0]])*int_b; // 4.0 because K_0 = 0.5*K(0)
   printf("integration: int_a %f, int_b %f mem %f\n",int_a,int_b,self_data[0]);
-  lastindex = 0;
+  lastindexN = 0,lastindexn=0;
   Nupdate = 0;
   
     
@@ -119,7 +119,8 @@ FixGLEPairJung::FixGLEPairJung(LAMMPS *lmp, int narg, char **arg) :
   int k,d,i,j,n,t;
   
   // allocate memory
-  memory->create(ran, Nt, atom->nlocal, "gle/pair/jung:ran");
+  int N = 2*Nt-1;
+  memory->create(ran, N, atom->nlocal, "gle/pair/jung:ran");
   memory->create(fd, atom->nlocal, "gle/pair/jung:fd");
   memory->create(fr, atom->nlocal, "gle/pair/jung:fr");
   size_vector = atom->nlocal;
@@ -151,11 +152,14 @@ FixGLEPairJung::FixGLEPairJung(LAMMPS *lmp, int narg, char **arg) :
       ran[t][i] = random->gaussian();
     }
   }
+  for (int t = 0; t < N; t++) {
+    for (int i = 0; i < nlocal; i++) {
+      ran[t][i] = random->gaussian();
+    }
+  }
   
   // initialize interaction matrices
   // CholDecomp to determine Aps (on the fly)
-  // initialize matrices
-  A = MatrixXd::Zero(nlocal*Nt,nlocal*Nt);
   // update cholesky
   update_cholesky();
   
@@ -178,6 +182,9 @@ FixGLEPairJung::~FixGLEPairJung()
   memory->destroy(r_save);
   memory->destroy(r_step);
   memory->destroy(f_step);
+  
+  memory->destroy(fd);
+  memory->destroy(fr);
   
   delete [] cross_data;
   delete [] self_data;
@@ -235,35 +242,33 @@ void FixGLEPairJung::initial_integrate(int vflag)
   
   // update noise
   for (int i = 0; i < nlocal; i++) {
-    ran[lastindex][(i)] = random->gaussian();
+    ran[lastindexN][(i)] = random->gaussian();
     fr[i] = 0.0;
     fd[i] = 0.0;
   }
   
   // determine random contribution
-  
-  for (int i = 0; i < nlocal; i++) {
-    int n = lastindex;
-    for (int u = 0; u < Nt; u++) {
+  int n = lastindexN;
+  int N = 2*Nt -1;
+  for (int t = 0; t < N; t++) {
+    for (int i = 0; i < nlocal; i++) {
       for (int j = 0; j < nlocal; j++) {
-	double matrix_aps = *(Aps.data() + (Nt-1)*nlocal*nlocal*Nt+(i)*nlocal*Nt+u*nlocal+(j)); // just read the last N lines (they include the full information)
-	fr[i] += matrix_aps*ran[n][(j)]*sqrt(update->dt);
+	fr[i] += a[t](j,i) * ran[n][j] * sqrt(update->dt);
       }
-      n--;
-      if (n==-1) n=Nt-1;
     }
+    n--;
+    if (n==-1) n=2*Nt-2;
   }
   
   // determine dissipative contribution
   for (int i = 0; i < nlocal; i++) {
-    int n = lastindex;
-    int m = lastindex-1;
+    int n = lastindexn;
+    int m = lastindexn-1;
     if (m==-1) m=Nt-1;
-    for (int u = 1; u < Nt; u++) {
+    for (int t = 1; t < Nt; t++) {
       for (int j = 0; j < nlocal; j++) {
-	double matrix_a = *(A.data() + i*nlocal*Nt+u*nlocal+j);
 	// include fd
-	fd[i] += matrix_a * (x_save[n][3*(j)]-x_save[m][3*(j)]);
+	fd[i] += A[t](j,i) * (x_save[n][3*(j)]-x_save[m][3*(j)]);
 	//printf("matrix_a %f, dx %f\n",matrix_a,x_save[n][3*j]-x_save[m][3*j]);
       }
       n--;
@@ -289,8 +294,10 @@ void FixGLEPairJung::initial_integrate(int vflag)
     }
   }
   
-  lastindex++;
-  if (lastindex == Nt) lastindex = 0;
+  lastindexN++;
+  if (lastindexN == 2*Nt-1) lastindexN = 0;
+  lastindexn++;
+  if (lastindexn == Nt) lastindexn = 0;
 
   t2 = MPI_Wtime();
   time_int_rel1 += t2 -t1;
@@ -330,9 +337,9 @@ void FixGLEPairJung::initial_integrate(int vflag)
   double unwrap[3];
   for (int i = 0; i < nlocal; i++) {
     domain->unmap(x[i],image[i],unwrap);
-    x_save[lastindex][3*(i)] = unwrap[0];
-    x_save[lastindex][3*(i)+1] = unwrap[1];
-    x_save[lastindex][3*(i)+2] = unwrap[2];
+    x_save[lastindexn][3*(i)] = unwrap[0];
+    x_save[lastindexn][3*(i)+1] = unwrap[1];
+    x_save[lastindexn][3*(i)+2] = unwrap[2];
     //printf("x: %f %f %f uw: %f %f %f mass %f tag %d\n",x[i][0],x[i][1],x[i][2],unwrap[0],unwrap[1],unwrap[2],mass[type[i]],tag[i]);
     /*x_save[lastindex][3*i] = x[i][0];
     x_save[lastindex][3*i+1] = x[i][1];
@@ -404,7 +411,7 @@ void FixGLEPairJung::final_integrate()
   time_int_rel2 += t2 -t1;
   
       // print timing
-  if (update->nsteps == update->ntimestep || update->ntimestep % 10000 == 0) {
+  if (update->nsteps == update->ntimestep || update->ntimestep % 10 == 0) {
     printf("Update %d times\n",Nupdate);
     printf("processor %d: time(read) = %f\n",me,time_read);
     printf("processor %d: time(init) = %f\n",me,time_init);
@@ -567,63 +574,141 @@ void FixGLEPairJung::read_input()
 ------------------------------------------------------------------------- */
 void FixGLEPairJung::update_cholesky() 
 {
-  // check distances
+  // initialize input matrix
   int k,d,i,j,n;
   int nlocal = atom->nlocal;
   double **x = atom->x;
-      tagint *tag = atom->tag;
+  tagint *tag = atom->tag;
   
   for (int t = 0; t < Nt; t++) {
+    Eigen::MatrixXd A_loc = Eigen::MatrixXd::Zero(nlocal,nlocal);
     for (int i = 0; i < nlocal; i++) {
-      for (int u = 0; u < Nt; u++) {
-        for (int j = 0; j < nlocal; j++) {
-	  int dt = t-u;
-	  dt = sqrt(dt*dt);
-	  if (i==j) *(A.data() + t*nlocal*nlocal*Nt+(i)*nlocal*Nt+u*nlocal+j) = self_data[dt];
-	  else {
-	    d = (r_step[i][4*(j)+3]- dStart)/dStep;
-	    if (d <= 0) {
-	      error->all(FLERR,"Particles closer than lower cutoff in fix/pair/gle\n");
-	      *(A.data() + t*nlocal*nlocal*Nt+(i)*nlocal*Nt+u*nlocal+j) = 0.0;
-	    } else if (d >= Nd) {
-	      *(A.data() + t*nlocal*nlocal*Nt+(i)*nlocal*Nt+u*nlocal+j) = 0.0;
-	    } else {
-	      *(A.data() + t*nlocal*nlocal*Nt+(i)*nlocal*Nt+u*nlocal+j) = cross_data[Nt*d+dt];
-	      //printf("%f\n",cross_data[Nt*d+dt]);
-	    }
+      for (int j = 0; j < nlocal; j++) {
+	if (i==j) A_loc(i,j) = self_data[t];
+	else {
+	  d = (r_step[i][4*(j)+3]- dStart)/dStep;
+	  if (d <= 0) {
+	    error->all(FLERR,"Particles closer than lower cutoff in fix/pair/gle\n");
+	  } else if (d >= Nd) {
+	    A_loc(i,j) = 0.0;
+	  } else {
+	    A_loc(i,j) = cross_data[Nt*d+t];
 	  }
 	}
       }
     }
+    A.push_back(A_loc);
   }
   
-  //printf("Update cholesky!\n");
+  vector<Eigen::MatrixXd> A_FT;
+  vector<Eigen::MatrixXd> a_FT;
   
-  // perform cholesky decomposition
-  //cout << "The matrix A is" << endl << A[k] << endl;
-  LLT<MatrixXd> Aps_comp(A); // compute the Cholesky decomposition of A
-  Aps = Aps_comp.matrixL().transpose(); // retrieve factor L  in the decomposition
-  // The previous two lines can also be written as "L = A.llt().matrixL()"
-  //cout << "The Cholesky factor L is" << endl << Aps[k] << endl;
-  //cout << "To check this, let us compute L * L.transpose()" << endl;
-  
-  cout << Aps  << endl;
-  //cout << "-------"  << endl;
-  //cout << Aps * Aps.transpose() << endl;
-  //cout << "-------"  << endl;
-  //cout << A << endl;
-   
-  if (Aps_comp.info()!=0) {
-    //cout << Aps * Aps.transpose() << endl;
-    //cout << A << endl;
-    //ComplexEigenSolver<MatrixXd> A_eigen(A);
-    //cout << A_eigen.eigenvalues() << endl;
-    int d = (r_step[0][4*1+3]- dStart)/dStep;
-    printf("%f %d %d\n",r_step[0][4*1+3],d,Nd);
-    error->all(FLERR,"LLT Cholesky not possible!\n");
+  // step 1: perform FT for every entry of A
+  double* data = new double[Nt*nlocal*nlocal];
+  for (int i=0; i<nlocal;i++) {
+    for (int j=0; j<nlocal;j++) {
+      for (int t=0; t<Nt; t++) {
+	 data[i*nlocal*Nt+j*Nt+t] = A[t](i,j);
+      }
+    }
   }
-    //cout << "This should equal the matrix A" << endl;
-    //printf("%f\n",Aps[k](0,0));
+  int N = 2*Nt-1;
+  complex<double> FT_data[N*nlocal*nlocal];
+  for (int i=0; i<nlocal;i++) {
+    for (int j=0; j<nlocal;j++) {
+      forwardDFT(&data[i*nlocal*Nt+j*Nt],&FT_data[i*nlocal*N+j*N]);
+    }
+  }
+  for (int t=0; t<N; t++) {
+    //printf("FT(A)[%d] ",t);
+    Eigen::MatrixXd A_FT0(nlocal,nlocal);
+    for (int i=0; i<nlocal;i++) {
+      for (int j=0; j<nlocal;j++) {
+	//printf("(%d,%d): %f,%fi ",i,j,FT_data[i*nlocal*N+j*N+t].real(),FT_data[i*nlocal*N+j*N+t].imag());
+	A_FT0(i,j) = FT_data[i*nlocal*N+j*N+t].real();
+      }
+    } 
+    //printf("\n");
+    A_FT.push_back(A_FT0);
+  }
+  //printf("-------------------------------\n");
+  delete [] data;
+  
+  // step 2: perform cholesky decomposition for every Aw
+  for (int t=0; t<N; t++) {
+    Eigen::LLT<Eigen::MatrixXd> A_comp(A_FT[t]); // compute the Cholesky decomposition of A
+    if (A_comp.info()!=0) {
+      error->all(FLERR,"LLT Cholesky not possible!\n");
+    }
+    Eigen::MatrixXd a_FT0 = A_comp.matrixL().transpose();
+    a_FT.push_back(a_FT0);
+  }
+  for (int t=0; t<N; t++) {
+    //printf("FT(a)[%d] ",t);
+    for (int i=0; i<nlocal;i++) {
+      for (int j=0; j<nlocal;j++) {
+	//printf("(%d,%d): %f ",i,j,a_FT[t](i,j));
+	FT_data[i*nlocal*N+j*N+t].real( a_FT[t](i,j) );
+	FT_data[i*nlocal*N+j*N+t].imag( 0.0 );
+      }
+    } 
+    //printf("\n");
+  }
+  //printf("-------------------------------\n");
+  A_FT.clear();
+  a_FT.clear();
+  
+  // step 3: inverse FT the obtained parameters aw
+  double *a_real= new double[N*nlocal*nlocal];
+  double *a_imag= new double[N*nlocal*nlocal];
+  for (int i=0; i<nlocal;i++) {
+    for (int j=0; j<nlocal;j++) {
+      for (int t=0; t<N; t++) {
+	a_real[i*nlocal*N+j*N+t] = 0.0;
+	a_imag[i*nlocal*N+j*N+t] = 0.0;
+      }
+    }
+  } 
+  for (int i=0; i<nlocal;i++) {
+    for (int j=0; j<nlocal;j++) {
+      inverseDFT(&FT_data[i*nlocal*N+j*N],&a_real[i*nlocal*N+j*N],&a_imag[i*nlocal*N+j*N]);
+    }
+  }
+  for (int t=0; t<N; t++) {
+    //printf("a[%d] ",t);
+    Eigen::MatrixXd a0(nlocal,nlocal);
+    for (int i=0; i<nlocal;i++) {
+      for (int j=0; j<nlocal;j++) {
+	//printf("(%d,%d): %f,%fi ",i,j,a_real[i*nlocal*N+j*N+t],a_imag[i*nlocal*N+j*N+t]);
+	a0(i,j) = a_real[i*nlocal*N+j*N+t];
+      }
+    } 
+    //printf("\n");
+    a.push_back(a0);
+  }
+  //printf("-------------------------------\n");
+  delete [] a_real;
+  delete [] a_imag;
+
+  
+  // step 4: test the method
+  /*for(int t=0;t<Nt;t++){
+    Eigen::MatrixXd A_res = Eigen::MatrixXd::Zero(nlocal,nlocal);
+    Eigen::MatrixXd A_loc;
+    for(int s=0;s<N;s++){
+      int ind = t+s;
+      if (t+s>=N) ind -= N;
+      A_loc = a[ind].transpose()*a[s];
+      A_res += A_loc;
+    }
+    //printf("A[%d] ",t);
+    for (int i=0; i<nlocal;i++) {
+      for (int j=0; j<nlocal;j++) {
+	//printf("(%d,%d): %f==%f ",i,j,A_res(i,j),A[t](i,j));
+      }
+    }
+    //printf("\n");
+  }*/
 }
 
 /* ----------------------------------------------------------------------
@@ -665,6 +750,40 @@ void FixGLEPairJung::distance_update()
   if (update->ntimestep%10==0) {
     //printf("min_dist %f\n",min_dist);
   }
+}
+
+/* ---------------------------------------------------------------------- 
+  performs a forward DFT of reell (and symmetric) input
+  ----------------------------------------------------------------------  */
+void FixGLEPairJung::forwardDFT(double *data, complex<double> *result) { 
+  int N = 2*Nt-1;
+  for (int k = -Nt+1; k < Nt; k++) { 
+    result[k+Nt-1].real(0.0);
+    result[k+Nt-1].imag(0.0);
+    for (int n = -Nt+1; n < Nt; n++) { 
+      double data_loc = 0.0;
+      if (n<0) data_loc = data[abs(n)];
+      else data_loc = data[n];
+      result[k+Nt-1].real( result[k+Nt-1].real() + data_loc * cos(2*M_PI / N * n * k));
+      result[k+Nt-1].imag( result[k+Nt-1].imag() - data_loc * sin(2*M_PI / N * n * k));
+    } 
+  } 
+}
+
+/* ---------------------------------------------------------------------- 
+  performs a backward DFT with complex input (and reell output)
+  ----------------------------------------------------------------------  */
+void FixGLEPairJung::inverseDFT(complex<double> *data, double *result, double *result_imag) { 
+  int N = 2*Nt-1;
+  for (int n = -Nt+1; n < Nt; n++) { 
+    result[n+Nt-1] = 0.0; 
+    for (int k = -Nt+1; k < Nt; k++) { 
+      result[n+Nt-1] += data[k+Nt-1].real() * cos(2*M_PI / N * n * k) - data[k+Nt-1].imag() * sin(2*M_PI / N * n * k);
+      result_imag[n+Nt-1] += data[k+Nt-1].imag() * cos(2*M_PI / N * n * k) + data[k+Nt-1].real() * sin(2*M_PI / N * n * k);
+    } 
+    result[n+Nt-1] /= N;
+    result_imag[n+Nt-1] /= N;
+  } 
 }
 
 

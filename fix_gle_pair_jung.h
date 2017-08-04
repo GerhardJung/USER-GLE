@@ -85,6 +85,9 @@ class FixGLEPairJung : public Fix {
   double time_init;
   double time_int_rel1;
   double time_dist_update;
+  double time_forwardft;
+  double time_chol;
+  double time_backwardft;
   double time_int_rel2;
   
   void read_input();

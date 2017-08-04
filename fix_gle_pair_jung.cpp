@@ -32,6 +32,8 @@
 #include "error.h"
 #include "group.h"
 #include "domain.h"
+#include "kiss_fft.h"
+#include "kiss_fftr.h"
 
 using namespace LAMMPS_NS;
 using namespace FixConst;
@@ -84,6 +86,9 @@ FixGLEPairJung::FixGLEPairJung(LAMMPS *lmp, int narg, char **arg) :
   time_init = 0.0;
   time_int_rel1 = 0.0;
   time_dist_update = 0.0;
+  time_forwardft= 0.0;
+  time_chol= 0.0;
+  time_backwardft= 0.0;
   time_int_rel2 = 0.0;
   
   // read input file
@@ -411,12 +416,15 @@ void FixGLEPairJung::final_integrate()
   time_int_rel2 += t2 -t1;
   
       // print timing
-  if (update->nsteps == update->ntimestep || update->ntimestep % 10 == 0) {
+  if (update->nsteps == update->ntimestep || update->ntimestep % 10000 == 0) {
     printf("Update %d times\n",Nupdate);
     printf("processor %d: time(read) = %f\n",me,time_read);
     printf("processor %d: time(init) = %f\n",me,time_init);
     printf("processor %d: time(int_rel1) = %f\n",me,time_int_rel1);
     printf("processor %d: time(dist_update) = %f\n",me,time_dist_update);
+    printf("processor %d: time(forward_ft) = %f\n",me,time_forwardft);
+    printf("processor %d: time(cholesky) = %f\n",me,time_chol);
+    printf("processor %d: time(backward_ft) = %f\n",me,time_backwardft);
     printf("processor %d: time(int_rel2) = %f\n",me,time_int_rel2);
   }
   
@@ -604,37 +612,61 @@ void FixGLEPairJung::update_cholesky()
   vector<Eigen::MatrixXd> a_FT;
   
   // step 1: perform FT for every entry of A
-  double* data = new double[Nt*nlocal*nlocal];
+  int N = 2*Nt-1;
+  //double* data = new double[Nt*nlocal*nlocal];
+  kiss_fft_cpx * buf;
+  kiss_fft_cpx * bufout;
+  buf=(kiss_fft_cpx*)KISS_FFT_MALLOC(sizeof(kiss_fft_cpx)*(N)*nlocal*nlocal);
+  bufout=(kiss_fft_cpx*)KISS_FFT_MALLOC(sizeof(kiss_fft_cpx)*(N)*nlocal*nlocal);
+  memset(buf,0,sizeof(kiss_fft_cpx)*(N)*nlocal*nlocal);
   for (int i=0; i<nlocal;i++) {
     for (int j=0; j<nlocal;j++) {
       for (int t=0; t<Nt; t++) {
-	 data[i*nlocal*Nt+j*Nt+t] = A[t](i,j);
+	 //data[i*nlocal*Nt+j*Nt+t] = A[t](i,j);
+	 buf[i*nlocal*N+j*N+t].r = A[t](i,j);
+	 if (t==0){
+	 //  buf[i*nlocal*N+j*N+N-t].r = 0;
+	 }else
+	   buf[i*nlocal*N+j*N+N-t].r = A[t](i,j);
       }
     }
   }
-  int N = 2*Nt-1;
+  /*double t1 = MPI_Wtime();
   complex<double> FT_data[N*nlocal*nlocal];
   for (int i=0; i<nlocal;i++) {
     for (int j=0; j<nlocal;j++) {
       forwardDFT(&data[i*nlocal*Nt+j*Nt],&FT_data[i*nlocal*N+j*N]);
     }
   }
+  double t2 = MPI_Wtime();
+  time_forwardft += t2 -t1;*/
+  // do the same with kiss_fft
+  t1 = MPI_Wtime();
+  kiss_fft_cfg st = kiss_fft_alloc( N ,0 ,0,0);
+  for (int i=0; i<nlocal;i++) {
+    for (int j=0; j<nlocal;j++) {
+      kiss_fft( st ,&buf[i*nlocal*(N)+j*(N)],&bufout[i*nlocal*(N)+j*(N)] );
+    }
+  }
+  t2 = MPI_Wtime();
+  time_forwardft += t2 -t1;
   for (int t=0; t<N; t++) {
-    //printf("FT(A)[%d] ",t);
+    printf("FT(A)[%d] ",t);
     Eigen::MatrixXd A_FT0(nlocal,nlocal);
     for (int i=0; i<nlocal;i++) {
       for (int j=0; j<nlocal;j++) {
-	//printf("(%d,%d): %f,%fi ",i,j,FT_data[i*nlocal*N+j*N+t].real(),FT_data[i*nlocal*N+j*N+t].imag());
-	A_FT0(i,j) = FT_data[i*nlocal*N+j*N+t].real();
+	printf("(%d,%d): %f,%fi ",i,j,/*FT_data[i*nlocal*N+j*N+t].real(),FT_data[i*nlocal*N+j*N+t].imag(),*/bufout[i*nlocal*N+j*N+t].r,bufout[i*nlocal*N+j*N+t].i);
+	A_FT0(i,j) = bufout[i*nlocal*N+j*N+t].r;
       }
     } 
-    //printf("\n");
+    printf("\n");
     A_FT.push_back(A_FT0);
   }
-  //printf("-------------------------------\n");
-  delete [] data;
+  printf("-------------------------------\n");
+  //delete [] data;
   
   // step 2: perform cholesky decomposition for every Aw
+  t1 = MPI_Wtime();
   for (int t=0; t<N; t++) {
     Eigen::LLT<Eigen::MatrixXd> A_comp(A_FT[t]); // compute the Cholesky decomposition of A
     if (A_comp.info()!=0) {
@@ -643,23 +675,24 @@ void FixGLEPairJung::update_cholesky()
     Eigen::MatrixXd a_FT0 = A_comp.matrixL().transpose();
     a_FT.push_back(a_FT0);
   }
+  t2 = MPI_Wtime();
+  time_chol += t2 -t1;
   for (int t=0; t<N; t++) {
-    //printf("FT(a)[%d] ",t);
+    printf("FT(a)[%d] ",t);
     for (int i=0; i<nlocal;i++) {
       for (int j=0; j<nlocal;j++) {
-	//printf("(%d,%d): %f ",i,j,a_FT[t](i,j));
-	FT_data[i*nlocal*N+j*N+t].real( a_FT[t](i,j) );
-	FT_data[i*nlocal*N+j*N+t].imag( 0.0 );
+	printf("(%d,%d): %f ",i,j,a_FT[t](i,j));
+	buf[i*nlocal*N+j*N+t].r = a_FT[t](i,j);
       }
     } 
-    //printf("\n");
+    printf("\n");
   }
-  //printf("-------------------------------\n");
+  printf("-------------------------------\n");
   A_FT.clear();
   a_FT.clear();
   
   // step 3: inverse FT the obtained parameters aw
-  double *a_real= new double[N*nlocal*nlocal];
+  /*double *a_real= new double[N*nlocal*nlocal];
   double *a_imag= new double[N*nlocal*nlocal];
   for (int i=0; i<nlocal;i++) {
     for (int j=0; j<nlocal;j++) {
@@ -668,31 +701,44 @@ void FixGLEPairJung::update_cholesky()
 	a_imag[i*nlocal*N+j*N+t] = 0.0;
       }
     }
-  } 
+  } */
+  /*t1 = MPI_Wtime();
   for (int i=0; i<nlocal;i++) {
     for (int j=0; j<nlocal;j++) {
-      inverseDFT(&FT_data[i*nlocal*N+j*N],&a_real[i*nlocal*N+j*N],&a_imag[i*nlocal*N+j*N]);
+      //inverseDFT(&FT_data[i*nlocal*N+j*N],&a_real[i*nlocal*N+j*N],&a_imag[i*nlocal*N+j*N]);
     }
   }
+  t2 = MPI_Wtime();
+  time_backwardft += t2 -t1;*/
+  t1 = MPI_Wtime();
+  for (int i=0; i<nlocal;i++) {
+    for (int j=0; j<nlocal;j++) {
+      kiss_fft( st ,&buf[i*nlocal*(N)+j*(N)],&bufout[i*nlocal*(N)+j*(N)] );
+    }
+  }
+  free(st);
+  kiss_fft_cleanup();
+  t2 = MPI_Wtime();
+  time_backwardft += t2 -t1;
   for (int t=0; t<N; t++) {
-    //printf("a[%d] ",t);
+    printf("a[%d] ",t);
     Eigen::MatrixXd a0(nlocal,nlocal);
     for (int i=0; i<nlocal;i++) {
       for (int j=0; j<nlocal;j++) {
-	//printf("(%d,%d): %f,%fi ",i,j,a_real[i*nlocal*N+j*N+t],a_imag[i*nlocal*N+j*N+t]);
-	a0(i,j) = a_real[i*nlocal*N+j*N+t];
+	printf("(%d,%d): %f,%fi ",i,j,bufout[i*nlocal*N+j*N+t].r,bufout[i*nlocal*N+j*N+t].i);
+	a0(i,j) = bufout[i*nlocal*N+j*N+t].r/N;
       }
     } 
-    //printf("\n");
+    printf("\n");
     a.push_back(a0);
   }
-  //printf("-------------------------------\n");
-  delete [] a_real;
-  delete [] a_imag;
+  printf("-------------------------------\n");
+  //delete [] a_real;
+  //delete [] a_imag;
 
   
   // step 4: test the method
-  /*for(int t=0;t<Nt;t++){
+  for(int t=0;t<Nt;t++){
     Eigen::MatrixXd A_res = Eigen::MatrixXd::Zero(nlocal,nlocal);
     Eigen::MatrixXd A_loc;
     for(int s=0;s<N;s++){
@@ -701,14 +747,14 @@ void FixGLEPairJung::update_cholesky()
       A_loc = a[ind].transpose()*a[s];
       A_res += A_loc;
     }
-    //printf("A[%d] ",t);
+    printf("A[%d] ",t);
     for (int i=0; i<nlocal;i++) {
       for (int j=0; j<nlocal;j++) {
-	//printf("(%d,%d): %f==%f ",i,j,A_res(i,j),A[t](i,j));
+	printf("(%d,%d): %f==%f ",i,j,A_res(i,j),A[t](i,j));
       }
     }
-    //printf("\n");
-  }*/
+    printf("\n");
+  }
 }
 
 /* ----------------------------------------------------------------------

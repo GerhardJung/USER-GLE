@@ -81,11 +81,16 @@ FixGLEPairJung::FixGLEPairJung(LAMMPS *lmp, int narg, char **arg) :
   if (t_target < 0)
     error->all(FLERR,"Fix gle/pair/jung temperature must be >= 0");
   
+  // Set number of dimensions
+  d=3;
+  d2=d*d;
+  
   // Timing
   time_read = 0.0;
   time_init = 0.0;
   time_int_rel1 = 0.0;
   time_dist_update = 0.0;
+  time_matrix_update = 0.0;
   time_forwardft= 0.0;
   time_chol= 0.0;
   time_backwardft= 0.0;
@@ -101,13 +106,13 @@ FixGLEPairJung::FixGLEPairJung(LAMMPS *lmp, int narg, char **arg) :
   random = new RanMars(lmp,seed + comm->me);
   
   t1 = MPI_Wtime();
-  memory->create(x_save, Nt, 3*atom->nlocal, "gle/pair/aux:r_save");
+  memory->create(x_save, Nt, 3*atom->nlocal, "gle/pair/aux:x_save");
   memory->create(r_save, atom->nlocal, atom->nlocal, "gle/pair/aux:r_save");
   memory->create(r_step, atom->nlocal, 4*atom->nlocal, "gle/pair/aux:r_step");
   memory->create(f_step, atom->nlocal, 3, "gle/pair/aux:f_step");
   distance_update();
   
-    int *type = atom->type;
+  int *type = atom->type;
   double *mass = atom->mass;
   dtv = update->dt;
   dtf = 0.5 * update->dt * force->ftm2v;
@@ -121,13 +126,13 @@ FixGLEPairJung::FixGLEPairJung(LAMMPS *lmp, int narg, char **arg) :
   int nlocal = atom->nlocal;
   double **x = atom->x;
   double **f = atom->f;
-  int k,d,i,j,n,t;
+  int k,i,j,n,t;
   
   // allocate memory
-  int N = 2*Nt-1;
-  memory->create(ran, N, atom->nlocal, "gle/pair/jung:ran");
-  memory->create(fd, atom->nlocal, "gle/pair/jung:fd");
-  memory->create(fr, atom->nlocal, "gle/pair/jung:fr");
+  int N = 2*Nt-2;
+  memory->create(ran, N, atom->nlocal*d, "gle/pair/jung:ran");
+  memory->create(fd, atom->nlocal,3, "gle/pair/jung:fd");
+  memory->create(fr, atom->nlocal*d,3, "gle/pair/jung:fr");
   size_vector = atom->nlocal;
   
   for (int i = 0; i < nlocal; i++) {
@@ -138,11 +143,11 @@ FixGLEPairJung::FixGLEPairJung(LAMMPS *lmp, int narg, char **arg) :
   
   // initialize forces
   for ( i=0; i< nlocal; i++) {
-    f_step[i][0] = 0.0;
-    f_step[i][1] = 0.0;
-    f_step[i][2] = 0.0;
-    fd[i] = 0.0;
-    fr[i] = 0.0;
+    for (int dim1=0; dim1<d; dim1++) { 
+      f_step[i][dim1] = 0.0;
+      fd[i][dim1] = 0.0;
+      fr[i][dim1] = 0.0;
+    }
   }
   
   imageint *image = atom->image;
@@ -151,15 +156,17 @@ FixGLEPairJung::FixGLEPairJung(LAMMPS *lmp, int narg, char **arg) :
   for (int t = 0; t < Nt; t++) {
     for (int i = 0; i < nlocal; i++) {
       domain->unmap(x[i],image[i],unwrap);
-      x_save[t][3*(i)] = unwrap[0];
-      x_save[t][3*(i)+1] = unwrap[1];
-      x_save[t][3*(i)+2] = unwrap[2];
-      ran[t][i] = random->gaussian();
+      for (int dim1=0; dim1<d; dim1++) { 
+	x_save[t][3*i+dim1] = unwrap[dim1];
+      }
     }
   }
+  
   for (int t = 0; t < N; t++) {
     for (int i = 0; i < nlocal; i++) {
-      ran[t][i] = random->gaussian();
+      for (int dim1=0; dim1<d; dim1++) { 
+	ran[t][d*i+dim1] = random->gaussian();
+      }
     }
   }
   
@@ -231,6 +238,7 @@ void FixGLEPairJung::initial_integrate(int vflag)
   double theta_qsps, theta_qspc;
   int ind_coef, ind_q=0;
   int s,c,m;
+  int indi,indd,indj;
 
   // update v and x of atoms in group
   double **x = atom->x;
@@ -240,59 +248,77 @@ void FixGLEPairJung::initial_integrate(int vflag)
   int *type = atom->type;
   int *mask = atom->mask;
   int nlocal = atom->nlocal;
-    tagint *tag = atom->tag;
+  tagint *tag = atom->tag;
   if (igroup == atom->firstgroup) nlocal = atom->nfirst;
   
   t1 = MPI_Wtime();
   
   // update noise
   for (int i = 0; i < nlocal; i++) {
-    ran[lastindexN][(i)] = random->gaussian();
-    fr[i] = 0.0;
-    fd[i] = 0.0;
+    for (int dim1=0; dim1<d; dim1++) { 
+      ran[lastindexN][d*i+dim1] = random->gaussian();
+      fr[i][dim1] = 0.0;
+      fd[i][dim1] = 0.0;
+    }
   }
   
   // determine random contribution
   int n = lastindexN;
-  int N = 2*Nt -1;
+  int N = 2*Nt -2;
+  double sqrt_dt=sqrt(update->dt);
   for (int t = 0; t < N; t++) {
     for (int i = 0; i < nlocal; i++) {
-      for (int j = 0; j < nlocal; j++) {
-	fr[i] += a[t](j,i) * ran[n][j] * sqrt(update->dt);
+      indi = i*nlocal*d2;
+      for (int dim1=0; dim1<d; dim1++) { 
+	indd = dim1*d*nlocal;
+	for (int j = 0; j < nlocal; j++) {
+	  indj = d*j;
+	  for (int dim2=0; dim2<d; dim2++) { 
+	    fr[i][dim1] += *(a[t].data() +indi+indd+indj+dim2) * ran[n][indj+dim2]*sqrt_dt;
+	  }
+	}
       }
     }
     n--;
-    if (n==-1) n=2*Nt-2;
+    if (n==-1) n=2*Nt-3;
   }
   
   // determine dissipative contribution
-  for (int i = 0; i < nlocal; i++) {
-    int n = lastindexn;
-    int m = lastindexn-1;
-    if (m==-1) m=Nt-1;
-    for (int t = 1; t < Nt; t++) {
-      for (int j = 0; j < nlocal; j++) {
-	// include fd
-	fd[i] += A[t](j,i) * (x_save[n][3*(j)]-x_save[m][3*(j)]);
-	//printf("matrix_a %f, dx %f\n",matrix_a,x_save[n][3*j]-x_save[m][3*j]);
+  n = lastindexn;
+  m = lastindexn-1;
+  if (m==-1) m=Nt-1;
+  for (int t = 1; t < Nt; t++) {
+    for (int i = 0; i < nlocal; i++) {
+      indi = i*nlocal*d2;
+      for (int dim1=0; dim1<d; dim1++) { 
+	indd = dim1*d*nlocal;
+	for (int j = 0; j < nlocal; j++) {
+	  indj = d*j;
+	  for (int dim2=0; dim2<d; dim2++) { 
+	    fd[i][dim1] += *(A[t].data() +indi+indd+indj+dim2) * (x_save[n][3*j+dim2]-x_save[m][3*j+dim2]);
+	  }
+	}
       }
-      n--;
-      m--;
-      if (n==-1) n=Nt-1;
-      if (m==-1) m=Nt-1;
     }
+    n--;
+    m--;
+    if (n==-1) n=Nt-1;
+    if (m==-1) m=Nt-1;
   }
-  
+  t2 = MPI_Wtime();
+  time_int_rel1 += t2 -t1;
   
   // Advance X by dt
   for (int i = 0; i < nlocal; i++) {
     if (mask[i] & groupbit) {
       meff = mass[type[i]];   
       //printf("x: %f f: %f fd: %f fr: %f\n",x[i][0],f_step[i][0],fd[i],fr[i]);
-      x[i][0] += int_b * update->dt * v[i][0] 
-	+ int_b * update->dt * update->dt / 2.0 / meff * f_step[i][0] 
-	- int_b * update->dt / meff/ 2.0 * fd[i] 
-	+ int_b*update->dt/ 2.0 / meff * fr[i]; // convection, conservative, dissipative, random
+      for (int dim1=0; dim1<d; dim1++) { 
+	x[i][dim1] += int_b * update->dt * v[i][dim1] 
+	  + int_b * update->dt * update->dt / 2.0 / meff * f_step[i][dim1] 
+	  - int_b * update->dt / meff/ 2.0 * fd[i][dim1]
+	  + int_b*update->dt/ 2.0 / meff * fr[i][dim1]; // convection, conservative, dissipative, random
+      }
       //printf("x: %f\n",x[i][0]);
       //x[i][1] += dtv * v[i][1];
       //x[i][2] += dtv * v[i][2];
@@ -300,15 +326,14 @@ void FixGLEPairJung::initial_integrate(int vflag)
   }
   
   lastindexN++;
-  if (lastindexN == 2*Nt-1) lastindexN = 0;
+  if (lastindexN == 2*Nt-2) lastindexN = 0;
   lastindexn++;
   if (lastindexn == Nt) lastindexn = 0;
 
-  t2 = MPI_Wtime();
-  time_int_rel1 += t2 -t1;
+
   
   // Update cholesky if necessary
-  t1 = MPI_Wtime();
+
   double dr_max = 0.0;
   double dr;
   for (int i = 0; i < nlocal; i++) {
@@ -320,6 +345,7 @@ void FixGLEPairJung::initial_integrate(int vflag)
       }
     }
   }
+  
   //printf("dr_max %f\n",dr_max);
   if (dr_max > dStep*dStep) {
     Nupdate++;
@@ -334,6 +360,7 @@ void FixGLEPairJung::initial_integrate(int vflag)
     }
   }
   
+  t1 = MPI_Wtime();
   // Determine normalized distance vectors
   distance_update();
   
@@ -342,9 +369,9 @@ void FixGLEPairJung::initial_integrate(int vflag)
   double unwrap[3];
   for (int i = 0; i < nlocal; i++) {
     domain->unmap(x[i],image[i],unwrap);
-    x_save[lastindexn][3*(i)] = unwrap[0];
-    x_save[lastindexn][3*(i)+1] = unwrap[1];
-    x_save[lastindexn][3*(i)+2] = unwrap[2];
+    x_save[lastindexn][3*i] = unwrap[0];
+    x_save[lastindexn][3*i+1] = unwrap[1];
+    x_save[lastindexn][3*i+2] = unwrap[2];
     //printf("x: %f %f %f uw: %f %f %f mass %f tag %d\n",x[i][0],x[i][1],x[i][2],unwrap[0],unwrap[1],unwrap[2],mass[type[i]],tag[i]);
     /*x_save[lastindex][3*i] = x[i][0];
     x_save[lastindex][3*i+1] = x[i][1];
@@ -388,10 +415,12 @@ void FixGLEPairJung::final_integrate()
       // Calculate integration constants
       meff = mass[type[i]];   
       dtfm = dtf / meff;
-      v[i][0] = int_a * v[i][0] 
-      + update->dt/2.0/meff * (int_a*f_step[i][0] + f[i][0]) 
-      - int_b * fd[i]/meff 
-      + int_b*fr[i]/meff;
+      for (int dim1=0; dim1<d; dim1++) { 
+	v[i][dim1] = int_a * v[i][dim1] 
+	  + update->dt/2.0/meff * (int_a*f_step[i][dim1] + f[i][dim1]) 
+	  - int_b * fd[i][dim1]/meff 
+	  + int_b*fr[i][dim1]/meff;
+      }
       //v[i][1] += dtfm * f_step[i][1];
       //v[i][2] += dtfm * f_step[i][2];
       //printf("v: %f %f %f\n",v[i][0],v[i][1],v[i][2]);
@@ -405,26 +434,27 @@ void FixGLEPairJung::final_integrate()
     f_step[i][2] = f[i][2];
   }
 
-  
+  // force equals .... (not yet implemented)
   for ( int i=0; i< nlocal; i++) {
-    f[i][0] = fr[i];
-    f[i][1] = 0.0;
-    f[i][2] = 0.0;
+    f[i][0] = fr[i][0];
+    f[i][1] = fr[i][1];
+    f[i][2] = fr[i][2];
   }
 
   t2 = MPI_Wtime();
   time_int_rel2 += t2 -t1;
   
       // print timing
-  if (update->nsteps == update->ntimestep || update->ntimestep % 10000 == 0) {
+  if (update->nsteps == update->ntimestep || update->ntimestep % 100000 == 0) {
     printf("Update %d times\n",Nupdate);
     printf("processor %d: time(read) = %f\n",me,time_read);
     printf("processor %d: time(init) = %f\n",me,time_init);
     printf("processor %d: time(int_rel1) = %f\n",me,time_int_rel1);
-    printf("processor %d: time(dist_update) = %f\n",me,time_dist_update);
+    printf("processor %d: time(matrix_update) = %f\n",me,time_matrix_update);
     printf("processor %d: time(forward_ft) = %f\n",me,time_forwardft);
     printf("processor %d: time(cholesky) = %f\n",me,time_chol);
     printf("processor %d: time(backward_ft) = %f\n",me,time_backwardft);
+    printf("processor %d: time(dist_update) = %f\n",me,time_dist_update);
     printf("processor %d: time(int_rel2) = %f\n",me,time_int_rel2);
   }
   
@@ -441,7 +471,7 @@ double FixGLEPairJung::compute_vector(int n)
   
   //printf("%d %d\n",t,i);
   
-  return fr[n];
+  return fr[n][0];
 }
 
 
@@ -583,91 +613,134 @@ void FixGLEPairJung::read_input()
 void FixGLEPairJung::update_cholesky() 
 {
   // initialize input matrix
-  int k,d,i,j,n;
+  int k,dist,i,j,n;
   int nlocal = atom->nlocal;
   double **x = atom->x;
   tagint *tag = atom->tag;
-  
+  int indi,indd,indj;
+  int indiFFT,inddFFT,indjFFT;
+  double t1 = MPI_Wtime();
+  A.clear();
   for (int t = 0; t < Nt; t++) {
-    Eigen::MatrixXd A_loc = Eigen::MatrixXd::Zero(nlocal,nlocal);
+    Eigen::MatrixXd A_loc = Eigen::MatrixXd::Zero(d*nlocal,d*nlocal);
     for (int i = 0; i < nlocal; i++) {
-      for (int j = 0; j < nlocal; j++) {
-	if (i==j) A_loc(i,j) = self_data[t];
-	else {
-	  d = (r_step[i][4*(j)+3]- dStart)/dStep;
-	  if (d <= 0) {
-	    error->all(FLERR,"Particles closer than lower cutoff in fix/pair/gle\n");
-	  } else if (d >= Nd) {
-	    A_loc(i,j) = 0.0;
-	  } else {
-	    A_loc(i,j) = cross_data[Nt*d+t];
+      indi = i*nlocal*d2;
+      for (int dim1=0; dim1<d;dim1++) {
+	indd = dim1*d*nlocal;
+	for (int j = 0; j < nlocal; j++) {
+	  indj = d*j;
+	  if (i==j) {
+	    double data = self_data[t];
+	    for (int dim2=0; dim2<d;dim2++) {
+	      if (dim1==dim2) *(A_loc.data() +i*nlocal*d2+dim1*nlocal*d+j*d+dim2) = data;
+	      else *(A_loc.data() +i*nlocal*d2+dim1*nlocal*d+j*d+dim2) = 0.0;
+	    }
+	  }
+	  else {
+	    //printf("%f \n",r_step[i][4*(j)+3]);
+	    dist = (r_step[i][4*(j)+3]- dStart)/dStep;
+	    if (dist <= 0) {
+	      error->all(FLERR,"Particles closer than lower cutoff in fix/pair/gle\n");
+	    } else if (dist >= Nd) {
+	      for (int dim2=0; dim2<d;dim2++) {
+		*(A_loc.data() +indi+indd+indj+dim2) = 0.0;
+	      }
+	    } else {
+	      double data = cross_data[Nt*dist+t];
+	      for (int dim2=0; dim2<d;dim2++) {
+		*(A_loc.data() +i*nlocal*d2+dim1*nlocal*d+j*d+dim2) = data*r_step[i][4*j+dim1]*r_step[i][4*j+dim2];
+	      }
+	    }
 	  }
 	}
       }
     }
     A.push_back(A_loc);
+    //cout << A_loc << endl;
   }
-  
+  double t2 = MPI_Wtime();
+  time_matrix_update += t2 -t1;
   vector<Eigen::MatrixXd> A_FT;
   vector<Eigen::MatrixXd> a_FT;
   
   // step 1: perform FT for every entry of A
-  int N = 2*Nt-1;
-  //double* data = new double[Nt*nlocal*nlocal];
-  kiss_fft_cpx * buf;
+  int N = 2*Nt-2;
+  kiss_fft_scalar * buf;
   kiss_fft_cpx * bufout;
-  buf=(kiss_fft_cpx*)KISS_FFT_MALLOC(sizeof(kiss_fft_cpx)*(N)*nlocal*nlocal);
-  bufout=(kiss_fft_cpx*)KISS_FFT_MALLOC(sizeof(kiss_fft_cpx)*(N)*nlocal*nlocal);
-  memset(buf,0,sizeof(kiss_fft_cpx)*(N)*nlocal*nlocal);
+  buf=(kiss_fft_scalar*)KISS_FFT_MALLOC(sizeof(kiss_fft_scalar)*N*nlocal*nlocal*d2);
+  bufout=(kiss_fft_cpx*)KISS_FFT_MALLOC(sizeof(kiss_fft_cpx)*N*nlocal*nlocal*d2);
+  t1 = MPI_Wtime();
   for (int i=0; i<nlocal;i++) {
-    for (int j=0; j<nlocal;j++) {
-      for (int t=0; t<Nt; t++) {
-	 //data[i*nlocal*Nt+j*Nt+t] = A[t](i,j);
-	 buf[i*nlocal*N+j*N+t].r = A[t](i,j);
-	 if (t==0){
-	 //  buf[i*nlocal*N+j*N+N-t].r = 0;
-	 }else
-	   buf[i*nlocal*N+j*N+N-t].r = A[t](i,j);
+    indi = i*nlocal*d2;
+    indiFFT = i*nlocal*d2*N;
+    for (int dim1=0; dim1<d;dim1++) {
+      indd = dim1*nlocal*d;
+      inddFFT = dim1*nlocal*d*N;
+      for (int j=0; j<nlocal;j++) {
+	indj = d*j;
+	indjFFT = d*N*j; 
+	for (int dim2=0; dim2<d;dim2++) {
+	  for (int t=0; t<Nt; t++) {
+	    //data[i*nlocal*Nt+j*Nt+t] = A[t](i,j);
+	    buf[indiFFT+inddFFT+indjFFT+N*dim2+t] = *(A[t].data() +indi+indd+indj+dim2);
+	    if (t==0 || t==Nt-1){
+	    //  buf[i*nlocal*N+j*N+N-t].r = 0;
+	    } else buf[indiFFT+inddFFT+indjFFT+N*dim2+N-t] = *(A[t].data() +indi+indd+indj+dim2);
+	  }
+	}
       }
     }
   }
-  /*double t1 = MPI_Wtime();
-  complex<double> FT_data[N*nlocal*nlocal];
-  for (int i=0; i<nlocal;i++) {
-    for (int j=0; j<nlocal;j++) {
-      forwardDFT(&data[i*nlocal*Nt+j*Nt],&FT_data[i*nlocal*N+j*N]);
-    }
-  }
-  double t2 = MPI_Wtime();
-  time_forwardft += t2 -t1;*/
-  // do the same with kiss_fft
+  t2 = MPI_Wtime();
+  time_matrix_update += t2 -t1;
+  // do the fft with kiss_fft
+  kiss_fftr_cfg st = kiss_fftr_alloc( N ,0 ,0,0);
   t1 = MPI_Wtime();
-  kiss_fft_cfg st = kiss_fft_alloc( N ,0 ,0,0);
   for (int i=0; i<nlocal;i++) {
-    for (int j=0; j<nlocal;j++) {
-      kiss_fft( st ,&buf[i*nlocal*(N)+j*(N)],&bufout[i*nlocal*(N)+j*(N)] );
+    indiFFT = i*nlocal*d2*N;
+    for (int dim1=0; dim1<d;dim1++) {
+      inddFFT = dim1*nlocal*d*N;
+      for (int j=0; j<nlocal;j++) {
+	indjFFT = d*N*j; 
+	for (int dim2=0; dim2<d;dim2++) {
+	  kiss_fftr( st ,&buf[indiFFT+inddFFT+indjFFT+N*dim2],&bufout[indiFFT+inddFFT+indjFFT+N*dim2] );
+	}
+      }
     }
   }
   t2 = MPI_Wtime();
   time_forwardft += t2 -t1;
-  for (int t=0; t<N; t++) {
-    printf("FT(A)[%d] ",t);
-    Eigen::MatrixXd A_FT0(nlocal,nlocal);
+  t1 = MPI_Wtime();
+  for (int t=0; t<Nt; t++) {
+    //printf("FT(A)[%d] ",t);
+    Eigen::MatrixXd A_FT0(d*nlocal,d*nlocal);
     for (int i=0; i<nlocal;i++) {
-      for (int j=0; j<nlocal;j++) {
-	printf("(%d,%d): %f,%fi ",i,j,/*FT_data[i*nlocal*N+j*N+t].real(),FT_data[i*nlocal*N+j*N+t].imag(),*/bufout[i*nlocal*N+j*N+t].r,bufout[i*nlocal*N+j*N+t].i);
-	A_FT0(i,j) = bufout[i*nlocal*N+j*N+t].r;
+      indi = i*nlocal*d2;
+      indiFFT = i*nlocal*d2*N;
+      for (int dim1=0; dim1<d;dim1++) {
+	indd = dim1*nlocal*d;
+	inddFFT = dim1*nlocal*d*N;
+	for (int j=0; j<nlocal;j++) {
+	  indj = d*j;
+	  indjFFT = d*N*j; 
+	  for (int dim2=0; dim2<d;dim2++) {
+	    //printf("(%d,%d): %f ",i,j,/*FT_data[i*nlocal*N+j*N+t].real(),FT_data[i*nlocal*N+j*N+t].imag(),*/bufout[i*nlocal*N+j*N+t].r);
+	    *(A_FT0.data() +indi+indd+indj+dim2) = bufout[indiFFT+inddFFT+indjFFT+N*dim2+t].r;
+	  }
+	}
       }
     } 
-    printf("\n");
+    //printf("\n");
     A_FT.push_back(A_FT0);
   }
-  printf("-------------------------------\n");
-  //delete [] data;
+  t2 = MPI_Wtime();
+  time_matrix_update += t2 -t1;
+  //printf("-------------------------------\n");
   
   // step 2: perform cholesky decomposition for every Aw
   t1 = MPI_Wtime();
-  for (int t=0; t<N; t++) {
+  for (int t=0; t<Nt; t++) {
+    //cout << A_FT[t] << endl;
     Eigen::LLT<Eigen::MatrixXd> A_comp(A_FT[t]); // compute the Cholesky decomposition of A
     if (A_comp.info()!=0) {
       error->all(FLERR,"LLT Cholesky not possible!\n");
@@ -677,68 +750,93 @@ void FixGLEPairJung::update_cholesky()
   }
   t2 = MPI_Wtime();
   time_chol += t2 -t1;
-  for (int t=0; t<N; t++) {
-    printf("FT(a)[%d] ",t);
-    for (int i=0; i<nlocal;i++) {
+  t1 = MPI_Wtime();
+
+  //printf("FT(a)[%d] ",t);
+  for (int i=0; i<nlocal;i++) {
+    indi = i*nlocal*d2;
+    indiFFT = i*nlocal*d2*N;
+    for (int dim1=0; dim1<d;dim1++) {
+      indd = dim1*nlocal*d;
+      inddFFT = dim1*nlocal*d*N;
       for (int j=0; j<nlocal;j++) {
-	printf("(%d,%d): %f ",i,j,a_FT[t](i,j));
-	buf[i*nlocal*N+j*N+t].r = a_FT[t](i,j);
+	indj = d*j;
+	indjFFT = d*N*j; 
+	for (int dim2=0; dim2<d;dim2++) {
+	  for (int t=0; t<Nt; t++) {
+	    //printf("(%d,%d): %f ",i,j,a_FT[t](i,j));
+	    bufout[indiFFT+inddFFT+indjFFT+N*dim2+t].r = *(a_FT[t].data() +indi+indd+indj+dim2);
+	    bufout[indiFFT+inddFFT+indjFFT+N*dim2+t].i = 0.0;
+	    if (t==0 || t==Nt-1){ }
+	    else {
+	      bufout[indiFFT+inddFFT+indjFFT+N*dim2+N-t].r = *(a_FT[t].data() +indi+indd+indj+dim2);
+	      bufout[indiFFT+inddFFT+indjFFT+N*dim2+N-t].i = 0.0;
+	    }
+	  }
+	}
       }
     } 
-    printf("\n");
+    //printf("\n");
   }
-  printf("-------------------------------\n");
+  t2 = MPI_Wtime();
+  time_matrix_update += t2 -t1;
+  
   A_FT.clear();
   a_FT.clear();
-  
-  // step 3: inverse FT the obtained parameters aw
-  /*double *a_real= new double[N*nlocal*nlocal];
-  double *a_imag= new double[N*nlocal*nlocal];
-  for (int i=0; i<nlocal;i++) {
-    for (int j=0; j<nlocal;j++) {
-      for (int t=0; t<N; t++) {
-	a_real[i*nlocal*N+j*N+t] = 0.0;
-	a_imag[i*nlocal*N+j*N+t] = 0.0;
-      }
-    }
-  } */
-  /*t1 = MPI_Wtime();
-  for (int i=0; i<nlocal;i++) {
-    for (int j=0; j<nlocal;j++) {
-      //inverseDFT(&FT_data[i*nlocal*N+j*N],&a_real[i*nlocal*N+j*N],&a_imag[i*nlocal*N+j*N]);
-    }
-  }
-  t2 = MPI_Wtime();
-  time_backwardft += t2 -t1;*/
+
+  kiss_fftr_cfg sti = kiss_fftr_alloc( N ,1 ,0,0);
   t1 = MPI_Wtime();
   for (int i=0; i<nlocal;i++) {
-    for (int j=0; j<nlocal;j++) {
-      kiss_fft( st ,&buf[i*nlocal*(N)+j*(N)],&bufout[i*nlocal*(N)+j*(N)] );
+    indiFFT = i*nlocal*d2*N;
+    for (int dim1=0; dim1<d;dim1++) {
+      inddFFT = dim1*nlocal*d*N;
+      for (int j=0; j<nlocal;j++) {
+	indjFFT = d*N*j; 
+	for (int dim2=0; dim2<d;dim2++) {
+	  kiss_fftri( sti ,&bufout[indiFFT+inddFFT+indjFFT+N*dim2],&buf[indiFFT+inddFFT+indjFFT+N*dim2] );
+	}
+      }
     }
   }
-  free(st);
-  kiss_fft_cleanup();
   t2 = MPI_Wtime();
   time_backwardft += t2 -t1;
+  free(st); free(sti);
+  kiss_fft_cleanup();
+  t1 = MPI_Wtime();
+  a.clear();
   for (int t=0; t<N; t++) {
-    printf("a[%d] ",t);
-    Eigen::MatrixXd a0(nlocal,nlocal);
+    //printf("a[%d] ",t);
+    Eigen::MatrixXd a0(d*nlocal,d*nlocal);
+    int ind = t+Nt-1;
+    if (ind >= N) ind -= N;
     for (int i=0; i<nlocal;i++) {
-      for (int j=0; j<nlocal;j++) {
-	printf("(%d,%d): %f,%fi ",i,j,bufout[i*nlocal*N+j*N+t].r,bufout[i*nlocal*N+j*N+t].i);
-	a0(i,j) = bufout[i*nlocal*N+j*N+t].r/N;
+      indi = i*nlocal*d2;
+      indiFFT = i*nlocal*d2*N;
+      for (int dim1=0; dim1<d;dim1++) {
+	indd = dim1*nlocal*d;
+	inddFFT = dim1*nlocal*d*N;
+	for (int j=0; j<nlocal;j++) {
+	  indj = d*j;
+	  indjFFT = d*N*j; 
+	  //printf("(%d,%d): %f ",i,j,buf[i*nlocal*N+j*N+t]/N);
+	  // resort indices
+	  for (int dim2=0; dim2<d;dim2++) {
+	    *(a0.data() +indi+indd+indj+dim2) = buf[indiFFT+inddFFT+indjFFT+N*dim2+ind]/N;
+	  }
+	}
       }
     } 
-    printf("\n");
+    //printf("\n");
     a.push_back(a0);
   }
-  printf("-------------------------------\n");
-  //delete [] a_real;
-  //delete [] a_imag;
+  t2 = MPI_Wtime();
+  time_matrix_update += t2 -t1;
+  //printf("-------------------------------\n");
+  free(buf); free(bufout);
 
   
   // step 4: test the method
-  for(int t=0;t<Nt;t++){
+  /*for(int t=0;t<Nt;t++){
     Eigen::MatrixXd A_res = Eigen::MatrixXd::Zero(nlocal,nlocal);
     Eigen::MatrixXd A_loc;
     for(int s=0;s<N;s++){
@@ -754,7 +852,7 @@ void FixGLEPairJung::update_cholesky()
       }
     }
     printf("\n");
-  }
+  }*/
 }
 
 /* ----------------------------------------------------------------------
@@ -796,40 +894,6 @@ void FixGLEPairJung::distance_update()
   if (update->ntimestep%10==0) {
     //printf("min_dist %f\n",min_dist);
   }
-}
-
-/* ---------------------------------------------------------------------- 
-  performs a forward DFT of reell (and symmetric) input
-  ----------------------------------------------------------------------  */
-void FixGLEPairJung::forwardDFT(double *data, complex<double> *result) { 
-  int N = 2*Nt-1;
-  for (int k = -Nt+1; k < Nt; k++) { 
-    result[k+Nt-1].real(0.0);
-    result[k+Nt-1].imag(0.0);
-    for (int n = -Nt+1; n < Nt; n++) { 
-      double data_loc = 0.0;
-      if (n<0) data_loc = data[abs(n)];
-      else data_loc = data[n];
-      result[k+Nt-1].real( result[k+Nt-1].real() + data_loc * cos(2*M_PI / N * n * k));
-      result[k+Nt-1].imag( result[k+Nt-1].imag() - data_loc * sin(2*M_PI / N * n * k));
-    } 
-  } 
-}
-
-/* ---------------------------------------------------------------------- 
-  performs a backward DFT with complex input (and reell output)
-  ----------------------------------------------------------------------  */
-void FixGLEPairJung::inverseDFT(complex<double> *data, double *result, double *result_imag) { 
-  int N = 2*Nt-1;
-  for (int n = -Nt+1; n < Nt; n++) { 
-    result[n+Nt-1] = 0.0; 
-    for (int k = -Nt+1; k < Nt; k++) { 
-      result[n+Nt-1] += data[k+Nt-1].real() * cos(2*M_PI / N * n * k) - data[k+Nt-1].imag() * sin(2*M_PI / N * n * k);
-      result_imag[n+Nt-1] += data[k+Nt-1].imag() * cos(2*M_PI / N * n * k) + data[k+Nt-1].real() * sin(2*M_PI / N * n * k);
-    } 
-    result[n+Nt-1] /= N;
-    result_imag[n+Nt-1] /= N;
-  } 
 }
 
 

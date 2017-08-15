@@ -57,14 +57,15 @@ class FixGLEPairJung : public Fix {
   double tStart,tStep,tStop;
   int Nt;
   int Niter;
+  int d,d2;
   
   double *self_data;
   double *cross_data;
   
   int Nupdate;
   double **ran;
-  double *fd;
-  double *fr;
+  double **fd;
+  double **fr;
   double **x_save;
   int lastindexN,lastindexn;
   double **r_step;
@@ -85,6 +86,7 @@ class FixGLEPairJung : public Fix {
   double time_init;
   double time_int_rel1;
   double time_dist_update;
+    double time_matrix_update;
   double time_forwardft;
   double time_chol;
   double time_backwardft;
@@ -93,8 +95,6 @@ class FixGLEPairJung : public Fix {
   void read_input();
   void update_cholesky();
   void distance_update();
-  void forwardDFT(double *data, std::complex<double> *result);
-  void inverseDFT(std::complex<double> *data, double *result, double *result_imag);
 };
 
 }

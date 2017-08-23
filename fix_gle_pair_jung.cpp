@@ -722,6 +722,7 @@ void FixGLEPairJung::update_cholesky()
   t1 = MPI_Wtime();
   std::vector<Eigen::SparseMatrix<double> > A_FT;
   std::vector<Eigen::SparseMatrix<double> > a_FT;
+  printf("FT_A\n");
   for (int t=0; t<Nt; t++) {
     Eigen::SparseMatrix<double> A_FT0_sparse(nlocal*d,nlocal*d);
     for (int i=0; i<non_zero;i++) {
@@ -730,6 +731,7 @@ void FixGLEPairJung::update_cholesky()
     A_FT0_sparse.setFromTriplets(tripletList.begin(), tripletList.end());
     tripletList.clear();
     A_FT.push_back(A_FT0_sparse);
+    cout << A_FT0_sparse;
   }
   t2 = MPI_Wtime();
   time_matrix_update += t2 -t1;
@@ -737,6 +739,7 @@ void FixGLEPairJung::update_cholesky()
   
   // step 2: perform sparse cholesky decomposition for every Aw
   t1 = MPI_Wtime();
+  printf("FT_a\n");
   for (int t=0; t<Nt; t++) {
     Eigen::SimplicialLLT<Eigen::SparseMatrix<double> > A_comp(A_FT[t]); // compute the sparse Cholesky decomposition of A
     if (A_comp.info()!=0) {
@@ -745,10 +748,12 @@ void FixGLEPairJung::update_cholesky()
     Eigen::SparseMatrix<double> a_FT0_sparse = A_comp.matrixL().transpose();
     // result matrix has to be permuted
     a_FT0_sparse = a_FT0_sparse*A_comp.permutationP();
+    //a_FT0_sparse = A_FT[t];
     /*if (t==0) {
      cout << A_FT[t] << endl;
      cout << a_FT0_sparse.transpose()*a_FT0_sparse << endl;
     }*/
+    cout << a_FT0_sparse << endl;
     a_FT.push_back(a_FT0_sparse);
   }
   t2 = MPI_Wtime();
@@ -783,9 +788,10 @@ void FixGLEPairJung::update_cholesky()
   free(st); free(sti);
   kiss_fft_cleanup();
   t1 = MPI_Wtime();
+  printf("a\n");
   for (int t=0; t<N; t++) {
     Eigen::SparseMatrix<double> a0_sparse(nlocal*d,nlocal*d);
-    int ind = t+Nt-1;
+    int ind = t;
     if (ind >= N) ind -= N;
     for (int i=0; i<non_zero;i++) {
       tripletList.push_back(T(row[i],col[i],buf[i*N+ind]/N));
@@ -793,6 +799,7 @@ void FixGLEPairJung::update_cholesky()
     a0_sparse.setFromTriplets(tripletList.begin(), tripletList.end());
     tripletList.clear();
     a.push_back(a0_sparse);
+    cout << a0_sparse;
   }
   t2 = MPI_Wtime();
   time_matrix_update += t2 -t1;
@@ -800,7 +807,8 @@ void FixGLEPairJung::update_cholesky()
   free(buf); free(bufout);
 
   // step 4: test the method
-  for(int t=0;t<1;t++){
+  printf("mem\n");
+  for(int t=0;t<Nt;t++){
     Eigen::SparseMatrix<double> A_res(nlocal*d,nlocal*d);
     Eigen::SparseMatrix<double> A_loc(nlocal*d,nlocal*d);
     for(int s=0;s<N;s++){
@@ -809,7 +817,6 @@ void FixGLEPairJung::update_cholesky()
       A_loc = a[ind].transpose()*a[s];
       A_res += A_loc;
     }
-    printf("A[%d] ",t);
     cout << A[t] << endl;
     cout << A_res << endl;
     printf("\n");

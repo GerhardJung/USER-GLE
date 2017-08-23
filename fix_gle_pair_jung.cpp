@@ -16,6 +16,14 @@
                          Andrew Baczewski (Michigan State/SNL)
 ------------------------------------------------------------------------- */
 
+
+/*
+Careful:
+-fix changes neighbor skin!
+-> neighbor update (int Neighbor::check_distance()) does not make sence due to wrong skin
+-> update every step necessary (not such a big problem since building the neighbour list is not the bottleneck in this kind of simulations)
+*/
+
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -23,11 +31,15 @@
 #include "math_extra.h"
 #include "atom.h"
 #include "force.h"
+#include "pair.h"
 #include "update.h"
 #include "comm.h"
 #include "input.h"
 #include "variable.h"
 #include "random_mars.h"
+#include "neighbor.h"
+#include "neigh_list.h"
+#include "neigh_request.h"
 #include "memory.h"
 #include "error.h"
 #include "group.h"
@@ -39,10 +51,9 @@ using namespace LAMMPS_NS;
 using namespace FixConst;
 using namespace std;
 using namespace Eigen;
+typedef Eigen::Triplet<double> T;
 
 #define MAXLINE 1024
-
-enum{TIME,FIT};
 
 
 /* ----------------------------------------------------------------------
@@ -107,10 +118,8 @@ FixGLEPairJung::FixGLEPairJung(LAMMPS *lmp, int narg, char **arg) :
   
   t1 = MPI_Wtime();
   memory->create(x_save, Nt, 3*atom->nlocal, "gle/pair/aux:x_save");
-  memory->create(r_save, atom->nlocal, atom->nlocal, "gle/pair/aux:r_save");
-  memory->create(r_step, atom->nlocal, 4*atom->nlocal, "gle/pair/aux:r_step");
-  memory->create(f_step, atom->nlocal, 3, "gle/pair/aux:f_step");
-  distance_update();
+  memory->create(x_save_update,atom->nlocal,3, "gle/pair/aux:x_save_update");
+  memory->create(fc, atom->nlocal, 3, "gle/pair/aux:fc");
   
   int *type = atom->type;
   double *mass = atom->mass;
@@ -135,16 +144,10 @@ FixGLEPairJung::FixGLEPairJung(LAMMPS *lmp, int narg, char **arg) :
   memory->create(fr, atom->nlocal*d,3, "gle/pair/jung:fr");
   size_vector = atom->nlocal;
   
-  for (int i = 0; i < nlocal; i++) {
-    for (int j = 0; j < nlocal; j++) {
-      r_save[i][j]=r_step[i][4*j+3];
-    }
-  }
-  
   // initialize forces
   for ( i=0; i< nlocal; i++) {
     for (int dim1=0; dim1<d; dim1++) { 
-      f_step[i][dim1] = 0.0;
+      fc[i][dim1] = 0.0;
       fd[i][dim1] = 0.0;
       fr[i][dim1] = 0.0;
     }
@@ -158,6 +161,7 @@ FixGLEPairJung::FixGLEPairJung(LAMMPS *lmp, int narg, char **arg) :
       domain->unmap(x[i],image[i],unwrap);
       for (int dim1=0; dim1<d; dim1++) { 
 	x_save[t][3*i+dim1] = unwrap[dim1];
+	x_save_update[i][dim1] = x[i][dim1];
       }
     }
   }
@@ -169,11 +173,6 @@ FixGLEPairJung::FixGLEPairJung(LAMMPS *lmp, int narg, char **arg) :
       }
     }
   }
-  
-  // initialize interaction matrices
-  // CholDecomp to determine Aps (on the fly)
-  // update cholesky
-  update_cholesky();
   
   t2 = MPI_Wtime();
   time_init += t2 -t1;
@@ -191,10 +190,9 @@ FixGLEPairJung::~FixGLEPairJung()
   memory->destroy(ran);
 
   memory->destroy(x_save);
-  memory->destroy(r_save);
-  memory->destroy(r_step);
-  memory->destroy(f_step);
+  memory->destroy(x_save_update);
   
+  memory->destroy(fc);
   memory->destroy(fd);
   memory->destroy(fr);
   
@@ -221,7 +219,28 @@ int FixGLEPairJung::setmask()
 
 void FixGLEPairJung::init()
 {
+  // need a full neighbor list, built whenever re-neighboring occurs
+  irequest = neighbor->request(this);
+  neighbor->requests[irequest]->pair = 0;
+  neighbor->requests[irequest]->fix = 1;
+  neighbor->requests[irequest]->half = 0;
+  neighbor->requests[irequest]->full = 1;
   
+  //increase pair/cutoff to the target values
+  if (!force->pair) {
+    error->all(FLERR,"We need a pair potential to build neighbor-list! TODO: If this error appears, just create pair potential with zero amplitude\n");
+  } else {
+    int my_type = atom->type[0];
+    double cutsq = dStop*dStop - force->pair->cutsq[my_type][my_type];
+    if (cutsq > 0) {
+      //increase skin
+      neighbor->skin = dStop - sqrt(force->pair->cutsq[my_type][my_type]) + 0.3;
+    }
+    // since skin is increased neighbor needs to be updated every step
+    char **c = (char**)&*(const char* const []){ "delay", "0", "every","1", "check", "no" };
+    neighbor->modify_params(6,c);
+  }
+  isInitialized = 0;
 }
 
 /* ----------------------------------------------------------------------
@@ -262,22 +281,24 @@ void FixGLEPairJung::initial_integrate(int vflag)
     }
   }
   
+  // initilize in the first step
+  if (!isInitialized) {
+    list = neighbor->lists[irequest];
+    update_cholesky();
+    isInitialized = 1;
+  }
+  
   // determine random contribution
   int n = lastindexN;
   int N = 2*Nt -2;
   double sqrt_dt=sqrt(update->dt);
   for (int t = 0; t < N; t++) {
-    for (int i = 0; i < nlocal; i++) {
-      indi = i*nlocal*d2;
-      for (int dim1=0; dim1<d; dim1++) { 
-	indd = dim1*d*nlocal;
-	for (int j = 0; j < nlocal; j++) {
-	  indj = d*j;
-	  for (int dim2=0; dim2<d; dim2++) { 
-	    fr[i][dim1] += *(a[t].data() +indi+indd+indj+dim2) * ran[n][indj+dim2]*sqrt_dt;
-	  }
-	}
-      }
+    for (int k=0; k<a[t].outerSize(); ++k) {
+      int dim = k%d;
+      int i = (k-dim)/d;
+      for (SparseMatrix<double>::InnerIterator it(a[t],k); it; ++it) {
+	fr[i][dim] += it.value()*ran[n][it.row()]*sqrt_dt;
+      }   
     }
     n--;
     if (n==-1) n=2*Nt-3;
@@ -288,17 +309,14 @@ void FixGLEPairJung::initial_integrate(int vflag)
   m = lastindexn-1;
   if (m==-1) m=Nt-1;
   for (int t = 1; t < Nt; t++) {
-    for (int i = 0; i < nlocal; i++) {
-      indi = i*nlocal*d2;
-      for (int dim1=0; dim1<d; dim1++) { 
-	indd = dim1*d*nlocal;
-	for (int j = 0; j < nlocal; j++) {
-	  indj = d*j;
-	  for (int dim2=0; dim2<d; dim2++) { 
-	    fd[i][dim1] += *(A[t].data() +indi+indd+indj+dim2) * (x_save[n][3*j+dim2]-x_save[m][3*j+dim2]);
-	  }
-	}
-      }
+    for (int k=0; k<A[t].outerSize(); ++k) {
+      int dim = k%d;
+      int i = (k-dim)/d;
+      for (SparseMatrix<double>::InnerIterator it(A[t],k); it; ++it) {
+	int dimj = it.row()%d;
+	int j = (it.row()-dimj)/d;
+	fd[i][dim] += it.value()* (x_save[n][3*j+dimj]-x_save[m][3*j+dimj]);
+      }   
     }
     n--;
     m--;
@@ -315,13 +333,10 @@ void FixGLEPairJung::initial_integrate(int vflag)
       //printf("x: %f f: %f fd: %f fr: %f\n",x[i][0],f_step[i][0],fd[i],fr[i]);
       for (int dim1=0; dim1<d; dim1++) { 
 	x[i][dim1] += int_b * update->dt * v[i][dim1] 
-	  + int_b * update->dt * update->dt / 2.0 / meff * f_step[i][dim1] 
+	  + int_b * update->dt * update->dt / 2.0 / meff * fc[i][dim1] 
 	  - int_b * update->dt / meff/ 2.0 * fd[i][dim1]
 	  + int_b*update->dt/ 2.0 / meff * fr[i][dim1]; // convection, conservative, dissipative, random
       }
-      //printf("x: %f\n",x[i][0]);
-      //x[i][1] += dtv * v[i][1];
-      //x[i][2] += dtv * v[i][2];
     }
   }
   
@@ -330,39 +345,28 @@ void FixGLEPairJung::initial_integrate(int vflag)
   lastindexn++;
   if (lastindexn == Nt) lastindexn = 0;
 
-
-  
-  // Update cholesky if necessary
-
+  // Check whether Cholesky Update is necessary
   double dr_max = 0.0;
-  double dr;
+  double dx,dy,dz,rsq;
   for (int i = 0; i < nlocal; i++) {
-    for (int j = 0; j < nlocal; j++) {
-      if (i!=j) {
-	dr = (r_save[i][j] - r_step[i][4*j+3]);
-	dr = dr*dr;
-	if (dr > dr_max) dr_max = dr;
-      }
-    }
+    dx = x_save_update[i][0] - x[i][0];
+    dy = x_save_update[i][1] - x[i][1];
+    dz = x_save_update[i][2] - x[i][2];
+    rsq = dx*dx+dy*dy+dz*dz;
+    if (rsq > dr_max) dr_max = rsq;
   }
-  
   //printf("dr_max %f\n",dr_max);
-  if (dr_max > dStep*dStep) {
+  if (dr_max > dStep*dStep/4.0) {
     Nupdate++;
-    //printf("Updating amplitudes\n");
-    update_cholesky();
-    
-    // update r_save
     for (int i = 0; i < nlocal; i++) {
-      for (int j = 0; j < nlocal; j++) {
-	r_save[i][j]=r_step[i][4*j+3];
-      }
+      x_save_update[i][0] = x[i][0];
+      x_save_update[i][1] = x[i][1];
+      x_save_update[i][2] = x[i][2];
     }
+    update_cholesky();
   }
   
   t1 = MPI_Wtime();
-  // Determine normalized distance vectors
-  distance_update();
   
   // Update positions
   imageint *image = atom->image;
@@ -372,10 +376,6 @@ void FixGLEPairJung::initial_integrate(int vflag)
     x_save[lastindexn][3*i] = unwrap[0];
     x_save[lastindexn][3*i+1] = unwrap[1];
     x_save[lastindexn][3*i+2] = unwrap[2];
-    //printf("x: %f %f %f uw: %f %f %f mass %f tag %d\n",x[i][0],x[i][1],x[i][2],unwrap[0],unwrap[1],unwrap[2],mass[type[i]],tag[i]);
-    /*x_save[lastindex][3*i] = x[i][0];
-    x_save[lastindex][3*i+1] = x[i][1];
-    x_save[lastindex][3*i+2] = x[i][2];*/
   }
   
   t2 = MPI_Wtime();
@@ -417,21 +417,18 @@ void FixGLEPairJung::final_integrate()
       dtfm = dtf / meff;
       for (int dim1=0; dim1<d; dim1++) { 
 	v[i][dim1] = int_a * v[i][dim1] 
-	  + update->dt/2.0/meff * (int_a*f_step[i][dim1] + f[i][dim1]) 
+	  + update->dt/2.0/meff * (int_a*fc[i][dim1] + f[i][dim1]) 
 	  - int_b * fd[i][dim1]/meff 
 	  + int_b*fr[i][dim1]/meff;
       }
-      //v[i][1] += dtfm * f_step[i][1];
-      //v[i][2] += dtfm * f_step[i][2];
-      //printf("v: %f %f %f\n",v[i][0],v[i][1],v[i][2]);
     }
   }
   
   // save conservative force for integration
   for ( int i=0; i< nlocal; i++) {
-    f_step[i][0] = f[i][0];
-    f_step[i][1] = f[i][1];
-    f_step[i][2] = f[i][2];
+    fc[i][0] = f[i][0];
+    fc[i][1] = f[i][1];
+    fc[i][2] = f[i][2];
   }
 
   // force equals .... (not yet implemented)
@@ -515,16 +512,6 @@ void FixGLEPairJung::read_input()
   fgets(line,MAXLINE,input);
   char *word = strtok(line," \t\n\r\f");
   
-  if (strcmp(word,"TIME") == 0) {
-    memory_flag = TIME;
-  } else if (strcmp(word,"FIT") == 0) {
-    memory_flag = FIT;
-  } else {
-    printf("WORD: %s\n",word);
-    error->one(FLERR,"Missing memory keyword in pair gle parameters");
-  }
-  word = strtok(NULL," \t\n\r\f");
-  
   // default values
   Niter = 500;
   tStart= 0.0;
@@ -571,11 +558,9 @@ void FixGLEPairJung::read_input()
     error->all(FLERR,"Fix gle/pair/aux dStop must be > dStart");
   Nd = (dStop - dStart) / dStep + 1.5;
   
-  if (memory_flag == TIME) {
-    if (tStop < tStart)
-      error->all(FLERR,"Fix gle/pair/aux tStop must be > tStart");
-    Nt = (tStop - tStart) / tStep + 1.5;
-  }
+  if (tStop < tStart)
+    error->all(FLERR,"Fix gle/pair/aux tStop must be > tStart");
+  Nt = (tStop - tStart) / tStep + 1.5;
   
     
   // initilize simulations for either TIME input (fitting necessary) or FIT input (only reading necessary)
@@ -613,81 +598,114 @@ void FixGLEPairJung::read_input()
 void FixGLEPairJung::update_cholesky() 
 {
   // initialize input matrix
-  int k,dist,i,j,n;
+  int dist,t;
+  int *type = atom->type;
   int nlocal = atom->nlocal;
+  int *tag = atom->tag;
   double **x = atom->x;
-  tagint *tag = atom->tag;
-  int indi,indd,indj;
-  int indiFFT,inddFFT,indjFFT;
+  int i,j,ii,jj,inum,jnum,itype,jtype,itag,jtag;
+  double xtmp,ytmp,ztmp,rsq,rsqi;
+  double *dr = new double[3];
+  int *ilist,*jlist,*numneigh,**firstneigh;
+  neighbor->build_one(list);
+  inum = list->inum;
+  ilist = list->ilist;
+  numneigh = list->numneigh;
+  firstneigh = list->firstneigh;
+  int non_zero=0;
+  int *row;
+  int *col;
   double t1 = MPI_Wtime();
+  std::vector<T> tripletList;
   A.clear();
+  a.clear();
+  
   for (int t = 0; t < Nt; t++) {
-    Eigen::MatrixXd A_loc = Eigen::MatrixXd::Zero(d*nlocal,d*nlocal);
-    for (int i = 0; i < nlocal; i++) {
-      indi = i*nlocal*d2;
+    Eigen::SparseMatrix<double> A0_sparse(nlocal*d,nlocal*d);
+    // access the neighbor lists
+    for (int ii = 0; ii < inum; ii++) {
+      i = ilist[ii];
+      xtmp = x[i][0];
+      ytmp = x[i][1];
+      ztmp = x[i][2];
+      itype = type[i];
+      itag = tag[i]-1;
+      jlist = firstneigh[i];
+      jnum = numneigh[i];
+      
+      // set self-correlation
       for (int dim1=0; dim1<d;dim1++) {
-	indd = dim1*d*nlocal;
-	for (int j = 0; j < nlocal; j++) {
-	  indj = d*j;
-	  if (i==j) {
-	    double data = self_data[t];
+	tripletList.push_back(T(d*itag+dim1,d*itag+dim1,self_data[t]));
+	if (t==0) non_zero++;
+      }
+      
+      //set cross-correlation
+      for (jj = 0; jj < jnum; jj++) {
+	j = jlist[jj];
+	j &= NEIGHMASK;
+	jtype = type[j];
+	jtag = tag[j]-1;
+	
+	dr[0] = xtmp - x[j][0];
+	dr[1] = ytmp - x[j][1];
+	dr[2] = ztmp - x[j][2];
+
+	rsq = dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2];
+	rsqi = 1/rsq;
+	dist = (sqrt(rsq) - dStart)/dStep;
+	    
+	if (dist < 0) {
+	  error->all(FLERR,"Particles closer than lower cutoff in fix/pair/jung\n");
+	} else if (dist < Nd) {
+	  double data = cross_data[Nt*dist+t];
+	  for (int dim1=0; dim1<d;dim1++) {
 	    for (int dim2=0; dim2<d;dim2++) {
-	      if (dim1==dim2) *(A_loc.data() +i*nlocal*d2+dim1*nlocal*d+j*d+dim2) = data;
-	      else *(A_loc.data() +i*nlocal*d2+dim1*nlocal*d+j*d+dim2) = 0.0;
-	    }
-	  }
-	  else {
-	    //printf("%f \n",r_step[i][4*(j)+3]);
-	    dist = (r_step[i][4*(j)+3]- dStart)/dStep;
-	    if (dist <= 0) {
-	      error->all(FLERR,"Particles closer than lower cutoff in fix/pair/gle\n");
-	    } else if (dist >= Nd) {
-	      for (int dim2=0; dim2<d;dim2++) {
-		*(A_loc.data() +indi+indd+indj+dim2) = 0.0;
-	      }
-	    } else {
-	      double data = cross_data[Nt*dist+t];
-	      for (int dim2=0; dim2<d;dim2++) {
-		*(A_loc.data() +i*nlocal*d2+dim1*nlocal*d+j*d+dim2) = data*r_step[i][4*j+dim1]*r_step[i][4*j+dim2];
-	      }
+	      tripletList.push_back(T(d*itag+dim1,d*jtag+dim2,data*dr[dim1]*dr[dim2]*rsqi));
+	      if (t==0) non_zero++;
 	    }
 	  }
 	}
       }
     }
-    A.push_back(A_loc);
-    //cout << A_loc << endl;
+    A0_sparse.setFromTriplets(tripletList.begin(), tripletList.end());
+    tripletList.clear();
+    A.push_back(A0_sparse);
+    //cout << A0_sparse << endl;
   }
+  printf("non_zero %d\n",non_zero);
+  delete [] dr;
   double t2 = MPI_Wtime();
   time_matrix_update += t2 -t1;
-  vector<Eigen::MatrixXd> A_FT;
-  vector<Eigen::MatrixXd> a_FT;
+  
+  // init column and row indices
+  row = new int[non_zero];
+  col = new int[non_zero];
+  int counter = 0;
+  for (int k=0; k<A[0].outerSize(); ++k) {
+    for (SparseMatrix<double>::InnerIterator it(A[t],k); it; ++it) {
+      col[counter] = it.col();
+      row[counter] = it.row();
+      counter++;
+    }
+  }
   
   // step 1: perform FT for every entry of A
   int N = 2*Nt-2;
   kiss_fft_scalar * buf;
   kiss_fft_cpx * bufout;
-  buf=(kiss_fft_scalar*)KISS_FFT_MALLOC(sizeof(kiss_fft_scalar)*N*nlocal*nlocal*d2);
-  bufout=(kiss_fft_cpx*)KISS_FFT_MALLOC(sizeof(kiss_fft_cpx)*N*nlocal*nlocal*d2);
+  buf=(kiss_fft_scalar*)KISS_FFT_MALLOC(sizeof(kiss_fft_scalar)*N*non_zero);
+  bufout=(kiss_fft_cpx*)KISS_FFT_MALLOC(sizeof(kiss_fft_cpx)*N*non_zero);
   t1 = MPI_Wtime();
-  for (int i=0; i<nlocal;i++) {
-    indi = i*nlocal*d2;
-    indiFFT = i*nlocal*d2*N;
-    for (int dim1=0; dim1<d;dim1++) {
-      indd = dim1*nlocal*d;
-      inddFFT = dim1*nlocal*d*N;
-      for (int j=0; j<nlocal;j++) {
-	indj = d*j;
-	indjFFT = d*N*j; 
-	for (int dim2=0; dim2<d;dim2++) {
-	  for (int t=0; t<Nt; t++) {
-	    //data[i*nlocal*Nt+j*Nt+t] = A[t](i,j);
-	    buf[indiFFT+inddFFT+indjFFT+N*dim2+t] = *(A[t].data() +indi+indd+indj+dim2);
-	    if (t==0 || t==Nt-1){
-	    //  buf[i*nlocal*N+j*N+N-t].r = 0;
-	    } else buf[indiFFT+inddFFT+indjFFT+N*dim2+N-t] = *(A[t].data() +indi+indd+indj+dim2);
-	  }
+  for (int t=0; t<Nt; t++) {
+    int counter = 0;
+    for (int k=0; k<A[t].outerSize(); ++k) {
+      for (SparseMatrix<double>::InnerIterator it(A[t],k); it; ++it) {
+	buf[counter*N+t] = it.value();
+	if (t==0 || t==Nt-1){ }
+	else {
+	  buf[counter*N+N-t] = it.value();
 	}
+	counter++;
       }
     }
   }
@@ -696,149 +714,95 @@ void FixGLEPairJung::update_cholesky()
   // do the fft with kiss_fft
   kiss_fftr_cfg st = kiss_fftr_alloc( N ,0 ,0,0);
   t1 = MPI_Wtime();
-  for (int i=0; i<nlocal;i++) {
-    indiFFT = i*nlocal*d2*N;
-    for (int dim1=0; dim1<d;dim1++) {
-      inddFFT = dim1*nlocal*d*N;
-      for (int j=0; j<nlocal;j++) {
-	indjFFT = d*N*j; 
-	for (int dim2=0; dim2<d;dim2++) {
-	  kiss_fftr( st ,&buf[indiFFT+inddFFT+indjFFT+N*dim2],&bufout[indiFFT+inddFFT+indjFFT+N*dim2] );
-	}
-      }
-    }
+  for (int i=0; i<non_zero;i++) {
+    kiss_fftr( st ,&buf[i*N],&bufout[i*N] );
   }
   t2 = MPI_Wtime();
   time_forwardft += t2 -t1;
   t1 = MPI_Wtime();
+  std::vector<Eigen::SparseMatrix<double> > A_FT;
+  std::vector<Eigen::SparseMatrix<double> > a_FT;
   for (int t=0; t<Nt; t++) {
-    //printf("FT(A)[%d] ",t);
-    Eigen::MatrixXd A_FT0(d*nlocal,d*nlocal);
-    for (int i=0; i<nlocal;i++) {
-      indi = i*nlocal*d2;
-      indiFFT = i*nlocal*d2*N;
-      for (int dim1=0; dim1<d;dim1++) {
-	indd = dim1*nlocal*d;
-	inddFFT = dim1*nlocal*d*N;
-	for (int j=0; j<nlocal;j++) {
-	  indj = d*j;
-	  indjFFT = d*N*j; 
-	  for (int dim2=0; dim2<d;dim2++) {
-	    //printf("(%d,%d): %f ",i,j,/*FT_data[i*nlocal*N+j*N+t].real(),FT_data[i*nlocal*N+j*N+t].imag(),*/bufout[i*nlocal*N+j*N+t].r);
-	    *(A_FT0.data() +indi+indd+indj+dim2) = bufout[indiFFT+inddFFT+indjFFT+N*dim2+t].r;
-	  }
-	}
-      }
-    } 
-    //printf("\n");
-    A_FT.push_back(A_FT0);
+    Eigen::SparseMatrix<double> A_FT0_sparse(nlocal*d,nlocal*d);
+    for (int i=0; i<non_zero;i++) {
+      tripletList.push_back(T(row[i],col[i],bufout[i*N+t].r));
+    }
+    A_FT0_sparse.setFromTriplets(tripletList.begin(), tripletList.end());
+    tripletList.clear();
+    A_FT.push_back(A_FT0_sparse);
   }
   t2 = MPI_Wtime();
   time_matrix_update += t2 -t1;
   //printf("-------------------------------\n");
   
-  // step 2: perform cholesky decomposition for every Aw
+  // step 2: perform sparse cholesky decomposition for every Aw
   t1 = MPI_Wtime();
   for (int t=0; t<Nt; t++) {
-    //cout << A_FT[t] << endl;
-    Eigen::LLT<Eigen::MatrixXd> A_comp(A_FT[t]); // compute the Cholesky decomposition of A
+    Eigen::SimplicialLLT<Eigen::SparseMatrix<double> > A_comp(A_FT[t]); // compute the sparse Cholesky decomposition of A
     if (A_comp.info()!=0) {
       error->all(FLERR,"LLT Cholesky not possible!\n");
     }
-    Eigen::MatrixXd a_FT0 = A_comp.matrixL().transpose();
-    a_FT.push_back(a_FT0);
+    Eigen::SparseMatrix<double> a_FT0_sparse = A_comp.matrixL().transpose();
+    // result matrix has to be permuted
+    a_FT0_sparse = a_FT0_sparse*A_comp.permutationP();
+    /*if (t==0) {
+     cout << A_FT[t] << endl;
+     cout << a_FT0_sparse.transpose()*a_FT0_sparse << endl;
+    }*/
+    a_FT.push_back(a_FT0_sparse);
   }
   t2 = MPI_Wtime();
   time_chol += t2 -t1;
   t1 = MPI_Wtime();
-
-  //printf("FT(a)[%d] ",t);
-  for (int i=0; i<nlocal;i++) {
-    indi = i*nlocal*d2;
-    indiFFT = i*nlocal*d2*N;
-    for (int dim1=0; dim1<d;dim1++) {
-      indd = dim1*nlocal*d;
-      inddFFT = dim1*nlocal*d*N;
-      for (int j=0; j<nlocal;j++) {
-	indj = d*j;
-	indjFFT = d*N*j; 
-	for (int dim2=0; dim2<d;dim2++) {
-	  for (int t=0; t<Nt; t++) {
-	    //printf("(%d,%d): %f ",i,j,a_FT[t](i,j));
-	    bufout[indiFFT+inddFFT+indjFFT+N*dim2+t].r = *(a_FT[t].data() +indi+indd+indj+dim2);
-	    bufout[indiFFT+inddFFT+indjFFT+N*dim2+t].i = 0.0;
-	    if (t==0 || t==Nt-1){ }
-	    else {
-	      bufout[indiFFT+inddFFT+indjFFT+N*dim2+N-t].r = *(a_FT[t].data() +indi+indd+indj+dim2);
-	      bufout[indiFFT+inddFFT+indjFFT+N*dim2+N-t].i = 0.0;
-	    }
-	  }
+  for (int t=0; t<Nt; t++) {
+    int counter = 0;
+    for (int k=0; k<a_FT[t].outerSize(); ++k) {
+      for (SparseMatrix<double>::InnerIterator it(a_FT[t],k); it; ++it) {
+	bufout[counter*N+t].r = it.value();
+	bufout[counter*N+t].i = 0.0;
+	if (t==0 || t==Nt-1){ }
+	else {
+	  bufout[counter*N+N-t].r = it.value();
+	  bufout[counter*N+N-t].i = 0.0;
 	}
+	counter++;
       }
-    } 
-    //printf("\n");
+    }
   }
   t2 = MPI_Wtime();
   time_matrix_update += t2 -t1;
-  
   A_FT.clear();
   a_FT.clear();
-
   kiss_fftr_cfg sti = kiss_fftr_alloc( N ,1 ,0,0);
   t1 = MPI_Wtime();
-  for (int i=0; i<nlocal;i++) {
-    indiFFT = i*nlocal*d2*N;
-    for (int dim1=0; dim1<d;dim1++) {
-      inddFFT = dim1*nlocal*d*N;
-      for (int j=0; j<nlocal;j++) {
-	indjFFT = d*N*j; 
-	for (int dim2=0; dim2<d;dim2++) {
-	  kiss_fftri( sti ,&bufout[indiFFT+inddFFT+indjFFT+N*dim2],&buf[indiFFT+inddFFT+indjFFT+N*dim2] );
-	}
-      }
-    }
+  for (int i=0; i<non_zero;i++) {
+    kiss_fftri( sti ,&bufout[i*N],&buf[i*N]);
   }
   t2 = MPI_Wtime();
   time_backwardft += t2 -t1;
   free(st); free(sti);
   kiss_fft_cleanup();
   t1 = MPI_Wtime();
-  a.clear();
   for (int t=0; t<N; t++) {
-    //printf("a[%d] ",t);
-    Eigen::MatrixXd a0(d*nlocal,d*nlocal);
+    Eigen::SparseMatrix<double> a0_sparse(nlocal*d,nlocal*d);
     int ind = t+Nt-1;
     if (ind >= N) ind -= N;
-    for (int i=0; i<nlocal;i++) {
-      indi = i*nlocal*d2;
-      indiFFT = i*nlocal*d2*N;
-      for (int dim1=0; dim1<d;dim1++) {
-	indd = dim1*nlocal*d;
-	inddFFT = dim1*nlocal*d*N;
-	for (int j=0; j<nlocal;j++) {
-	  indj = d*j;
-	  indjFFT = d*N*j; 
-	  //printf("(%d,%d): %f ",i,j,buf[i*nlocal*N+j*N+t]/N);
-	  // resort indices
-	  for (int dim2=0; dim2<d;dim2++) {
-	    *(a0.data() +indi+indd+indj+dim2) = buf[indiFFT+inddFFT+indjFFT+N*dim2+ind]/N;
-	  }
-	}
-      }
-    } 
-    //printf("\n");
-    a.push_back(a0);
+    for (int i=0; i<non_zero;i++) {
+      tripletList.push_back(T(row[i],col[i],buf[i*N+ind]/N));
+    }
+    a0_sparse.setFromTriplets(tripletList.begin(), tripletList.end());
+    tripletList.clear();
+    a.push_back(a0_sparse);
   }
   t2 = MPI_Wtime();
   time_matrix_update += t2 -t1;
   //printf("-------------------------------\n");
   free(buf); free(bufout);
 
-  
   // step 4: test the method
-  /*for(int t=0;t<Nt;t++){
-    Eigen::MatrixXd A_res = Eigen::MatrixXd::Zero(nlocal,nlocal);
-    Eigen::MatrixXd A_loc;
+  for(int t=0;t<1;t++){
+    Eigen::SparseMatrix<double> A_res(nlocal*d,nlocal*d);
+    Eigen::SparseMatrix<double> A_loc(nlocal*d,nlocal*d);
     for(int s=0;s<N;s++){
       int ind = t+s;
       if (t+s>=N) ind -= N;
@@ -846,53 +810,9 @@ void FixGLEPairJung::update_cholesky()
       A_res += A_loc;
     }
     printf("A[%d] ",t);
-    for (int i=0; i<nlocal;i++) {
-      for (int j=0; j<nlocal;j++) {
-	printf("(%d,%d): %f==%f ",i,j,A_res(i,j),A[t](i,j));
-      }
-    }
+    cout << A[t] << endl;
+    cout << A_res << endl;
     printf("\n");
-  }*/
-}
-
-/* ----------------------------------------------------------------------
-   updates the list of distance vectors between particles
-------------------------------------------------------------------------- */
-void FixGLEPairJung::distance_update() 
-{
-  int i,j;
-  int nlocal = atom->nlocal;
-  double **x = atom->x;
-  double xtmp, ytmp, ztmp, delx,dely,delz, dist,idist;
-  double min_dist = 20.0;
-  tagint *tag = atom->tag;
-  
-  for (i = 0; i < nlocal; i++) {
-    xtmp = x[i][0];
-    ytmp = x[i][1];
-    ztmp = x[i][2];
-    for (j = 0; j < nlocal; j++) {
-      if (j!= i) {
-	delx = xtmp - x[j][0];
-	dely = ytmp - x[j][1];
-	delz = ztmp - x[j][2];
-
-	domain->minimum_image(delx,dely,delz);
-	dist = sqrt(delx*delx + dely*dely + delz*delz);
-	if (dist < min_dist) min_dist = dist;
-	idist = 1.0/dist;
-      
-	r_step[i][4*(j)] = delx*idist;
-	r_step[i][4*(j)+1] = dely*idist;
-	r_step[i][4*(j)+2] = delz*idist;
-	r_step[i][4*(j)+3] = dist;
-	
-      }
-    }
-  }
-  
-  if (update->ntimestep%10==0) {
-    //printf("min_dist %f\n",min_dist);
   }
 }
 

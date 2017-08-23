@@ -62,21 +62,25 @@ class FixGLEPairJung : public Fix {
   double *self_data;
   double *cross_data;
   
+  int isInitialized;
   int Nupdate;
   double **ran;
   double **fd;
   double **fr;
   double **x_save;
+  double **x_save_update;
   int lastindexN,lastindexn;
-  double **r_step;
-  double **f_step;
-  double **r_save;
+  double **fc;
 
   class RanMars *random;
   
   // cholsky decomp
-  std::vector<Eigen::MatrixXd> A;
-  std::vector<Eigen::MatrixXd> a;
+  std::vector<Eigen::SparseMatrix<double> > A;
+  std::vector<Eigen::SparseMatrix<double> > a;
+  
+  // neighbor list
+  int irequest;
+  NeighList *list;
  
   
   // Timing 
@@ -94,7 +98,11 @@ class FixGLEPairJung : public Fix {
   
   void read_input();
   void update_cholesky();
-  void distance_update();
+  
+ private:
+  inline int sbmask(int j) {
+    return j >> SBBITS & 3;
+  }
 };
 
 }

@@ -93,8 +93,11 @@ class FixGLEPairJung : public Fix {
     double time_matrix_update;
   double time_forwardft;
   double time_chol;
+  double time_chol_analyze;
+  double time_chol_factorize;
   double time_backwardft;
   double time_int_rel2;
+  double time_test;
   
   void read_input();
   void update_cholesky();

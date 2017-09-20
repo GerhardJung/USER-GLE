@@ -51,6 +51,7 @@ using namespace LAMMPS_NS;
 using namespace FixConst;
 using namespace std;
 using namespace Eigen;
+typedef ConjugateGradient<SparseMatrix<double>,Lower, IncompleteCholesky<double> > ICCG;
 typedef Eigen::Triplet<double> T;
 
 #define MAXLINE 1024
@@ -104,8 +105,11 @@ FixGLEPairJung::FixGLEPairJung(LAMMPS *lmp, int narg, char **arg) :
   time_matrix_update = 0.0;
   time_forwardft= 0.0;
   time_chol= 0.0;
+  time_chol_analyze= 0.0;
+  time_chol_factorize= 0.0;
   time_backwardft= 0.0;
   time_int_rel2 = 0.0;
+  time_test = 0.0;
   
   // read input file
   t1 = MPI_Wtime();
@@ -356,7 +360,8 @@ void FixGLEPairJung::initial_integrate(int vflag)
     if (rsq > dr_max) dr_max = rsq;
   }
   //printf("dr_max %f\n",dr_max);
-  if (dr_max > dStep*dStep/4.0) {
+  //if (dr_max > dStep*dStep/4.0) 
+  {
     Nupdate++;
     for (int i = 0; i < nlocal; i++) {
       x_save_update[i][0] = x[i][0];
@@ -450,9 +455,12 @@ void FixGLEPairJung::final_integrate()
     printf("processor %d: time(matrix_update) = %f\n",me,time_matrix_update);
     printf("processor %d: time(forward_ft) = %f\n",me,time_forwardft);
     printf("processor %d: time(cholesky) = %f\n",me,time_chol);
+     printf("processor %d: time(cholesky_analyze) = %f\n",me,time_chol_analyze);
+     printf("processor %d: time(cholesky_factorize) = %f\n",me,time_chol_factorize);
     printf("processor %d: time(backward_ft) = %f\n",me,time_backwardft);
     printf("processor %d: time(dist_update) = %f\n",me,time_dist_update);
     printf("processor %d: time(int_rel2) = %f\n",me,time_int_rel2);
+    printf("processor %d: time(test) = %f\n",me,time_test);
   }
   
 
@@ -660,8 +668,10 @@ void FixGLEPairJung::update_cholesky()
 	  double data = cross_data[Nt*dist+t];
 	  for (int dim1=0; dim1<d;dim1++) {
 	    for (int dim2=0; dim2<d;dim2++) {
-	      tripletList.push_back(T(d*itag+dim1,d*jtag+dim2,data*dr[dim1]*dr[dim2]*rsqi));
-	      if (t==0) non_zero++;
+	      if (data*dr[dim1]*dr[dim2]*rsqi != 0) {
+		tripletList.push_back(T(d*itag+dim1,d*jtag+dim2,data*dr[dim1]*dr[dim2]*rsqi));
+		if (t==0) non_zero++;
+	      }
 	    }
 	  }
 	}
@@ -670,9 +680,9 @@ void FixGLEPairJung::update_cholesky()
     A0_sparse.setFromTriplets(tripletList.begin(), tripletList.end());
     tripletList.clear();
     A.push_back(A0_sparse);
-    //cout << A0_sparse << endl;
+    //if (t==10) cout << A0_sparse << endl;
   }
-  //printf("non_zero %d\n",non_zero);
+  printf("non_zero %d\n",non_zero);
   delete [] dr;
   double t2 = MPI_Wtime();
   time_matrix_update += t2 -t1;
@@ -741,68 +751,85 @@ void FixGLEPairJung::update_cholesky()
   t1 = MPI_Wtime();
   //printf("FT_a\n");
   for (int t=0; t<Nt; t++) {
-    Eigen::SimplicialLLT<Eigen::SparseMatrix<double> > A_comp(A_FT[t]); // compute the sparse Cholesky decomposition of A
+        double t1 = MPI_Wtime();
+    //Eigen::SimplicialLLT<Eigen::SparseMatrix<double> > A_comp_full(A_FT[t]); // compute the sparse Cholesky decomposition of A
+    Eigen::IncompleteCholesky<double> A_comp; // compute the sparse Cholesky decomposition of A
+    //A_comp.setInitialShift(0.0001);
+    A_comp.compute(A_FT[t]);
+    //A_comp.analyzePattern(A_FT[t]);
+    double t2 = MPI_Wtime();
+    time_chol_analyze += t2 -t1;
+    t1 = MPI_Wtime();
+    //A_comp.factorize(A_FT[t]);
+    
     if (A_comp.info()!=0) {
       error->all(FLERR,"LLT Cholesky not possible!\n");
     }
+    //Eigen::SparseMatrix<double> a_FT0_sparse_full = A_comp_full.matrixL().transpose();
     Eigen::SparseMatrix<double> a_FT0_sparse = A_comp.matrixL().transpose();
     // result matrix has to be permuted
-    a_FT0_sparse = a_FT0_sparse*A_comp.permutationP();
+    //a_FT0_sparse_full = a_FT0_sparse_full*A_comp_full.permutationP();
+    a_FT0_sparse = a_FT0_sparse*A_comp.permutationP()*sqrt(A_FT[t].coeffRef(0,0));
+    t2 = MPI_Wtime();
+    time_chol_factorize += t2 -t1;
     //a_FT0_sparse = A_FT[t];
-    //if (t==0) {
-    // cout << A_FT[t] << endl;
-    // cout << a_FT0_sparse.transpose()*a_FT0_sparse << endl;
-    //}
-    //cout << a_FT0_sparse << endl;
+
+    //printf("%d\n",t);
+      //cout << A_FT[t] << endl;
+     //cout << a_FT0_sparse << endl;
+     //cout << a_FT0_sparse_full << endl;
+     //cout << a_FT0_sparse.transpose()*a_FT0_sparse << endl;
+   
+    //if (t==10) cout << a_FT0_sparse << endl;
     a_FT.push_back(a_FT0_sparse);
   }
+
   t2 = MPI_Wtime();
   time_chol += t2 -t1;
+  //printf("done\n");
   
-  // reinit column and row indices, since cholesky changes form of matrices
+  // reinit column and row indices, since (incomplete) cholesky has different from for the different matrices
+  // trick just add all matrices -> iterator over all (non-zero) entries
+  Eigen::SparseMatrix<double> a_FT_iterator = a_FT[0];
+  for (t=1; t<Nt;t++) a_FT_iterator += a_FT[t];
+ 
   counter = 0;
-  for (int k=0; k<a_FT[0].outerSize(); ++k) {
-    for (SparseMatrix<double>::InnerIterator it(a_FT[0],k); it; ++it) {
+  for (int k=0; k<a_FT_iterator.outerSize(); ++k) {
+    for (SparseMatrix<double>::InnerIterator it(a_FT_iterator,k); it; ++it) {
       counter++;
     }
   }
+  
   non_zero = counter;
+  printf("non_zero %d\n",non_zero);
+  
   delete [] row;
   delete [] col;
   free(buf); free(bufout);
   buf=(kiss_fft_scalar*)KISS_FFT_MALLOC(sizeof(kiss_fft_scalar)*N*non_zero);
   bufout=(kiss_fft_cpx*)KISS_FFT_MALLOC(sizeof(kiss_fft_cpx)*N*non_zero);
-  row = new int[non_zero];
-  col = new int[non_zero];
-  counter = 0;
-  for (int k=0; k<a_FT[0].outerSize(); ++k) {
-    for (SparseMatrix<double>::InnerIterator it(a_FT[0],k); it; ++it) {
-      col[counter] = it.col();
-      row[counter] = it.row();
-      counter++;
-    }
-  }
   
-  t1 = MPI_Wtime();
+  //t1 = MPI_Wtime();
   for (int t=0; t<Nt; t++) {
     int counter = 0;
-    for (int k=0; k<a_FT[t].outerSize(); ++k) {
-      for (SparseMatrix<double>::InnerIterator it(a_FT[t],k); it; ++it) {
-	bufout[counter*N+t].r = it.value();
+    for (int k=0; k<a_FT_iterator.outerSize(); ++k) {
+      for (SparseMatrix<double>::InnerIterator it(a_FT_iterator,k); it; ++it) {
+	bufout[counter*N+t].r = a_FT[t].coeffRef(it.row(),it.col());
+	//printf("%f\n",a_FT[t].coeffRef(it.row(),it.col()));
 	bufout[counter*N+t].i = 0.0;
 	if (t==0 || t==Nt-1){ }
 	else {
-	  bufout[counter*N+N-t].r = it.value();
+	  bufout[counter*N+N-t].r = a_FT[t].coeffRef(it.row(),it.col());
 	  bufout[counter*N+N-t].i = 0.0;
 	}
 	counter++;
       }
     }
   }
-  t2 = MPI_Wtime();
+  //t2 = MPI_Wtime();
   time_matrix_update += t2 -t1;
   A_FT.clear();
-  a_FT.clear();
+
   
   // step 3: perform backward FT for every entry of a_FT
   kiss_fftr_cfg sti = kiss_fftr_alloc( N ,1 ,0,0);
@@ -821,23 +848,36 @@ void FixGLEPairJung::update_cholesky()
     Eigen::SparseMatrix<double> a0_sparse(nlocal*d,nlocal*d);
     int ind = t+Nt-1;
     if (ind >= N) ind -= N;
-    for (int i=0; i<non_zero;i++) {
+    int tp = ind;
+    if (tp >= Nt) tp = N -tp;
+    counter = 0;
+    for (int k=0; k<a_FT_iterator.outerSize(); ++k) {
+      for (SparseMatrix<double>::InnerIterator it(a_FT_iterator,k); it; ++it) {
+	if (it.value()!=0.0) {
+	  tripletList.push_back(T(it.row(),it.col(),buf[counter*N+ind]/N));
+	  counter++;
+	}
+      }
+    }
+    /*for (int i=0; i<non_zero;i++) {
       tripletList.push_back(T(row[i],col[i],buf[i*N+ind]/N));
       //printf("%f ",buf[i*N+ind]/N);
-    }
+    }*/
     a0_sparse.setFromTriplets(tripletList.begin(), tripletList.end());
     tripletList.clear();
     a.push_back(a0_sparse);
-    //cout << a0_sparse << endl;;
+    //printf("%d\n",t);
+    // cout << a0_sparse << endl;
   }
   t2 = MPI_Wtime();
   time_matrix_update += t2 -t1;
   //printf("-------------------------------\n");
   free(buf); free(bufout);
+  a_FT.clear();
 
   // step 4: test the method
-  /*printf("mem\n");
-  for(int t=0;t<Nt;t++){
+  //printf("mem\n");
+  /*for(int t=0;t<Nt;t++){
     Eigen::SparseMatrix<double> A_res(nlocal*d,nlocal*d);
     Eigen::SparseMatrix<double> A_loc(nlocal*d,nlocal*d);
     for(int s=0;s<N;s++){
@@ -846,9 +886,12 @@ void FixGLEPairJung::update_cholesky()
       A_loc = a[ind].transpose()*a[s];
       A_res += A_loc;
     }
-    cout << A[t] << endl;
-    cout << A_res << endl;
-    printf("\n");
+     {
+    //printf("%d\n",t);
+    //cout << A[t] << endl;
+    //cout << A_res << endl;
+    //printf("\n");
+    }
   }*/
 }
 

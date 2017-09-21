@@ -21,6 +21,13 @@ FixStyle(gle/pair,FixGLEPair)
 #define LMP_FIX_GLE_PAIR_H
 
 #include "fix.h"
+#include <iostream>
+#include <stdlib.h> 
+#include <Eigen/Dense>
+#include <Eigen/Eigen>
+#include <vector>
+
+#define USE_CHEBYSHEV
 
 namespace LAMMPS_NS {
 
@@ -29,42 +36,76 @@ class FixGLEPair : public Fix {
   FixGLEPair(class LAMMPS *, int, char **);
   virtual ~FixGLEPair();
   int setmask();
-  void init();
-  void setup(int);
-  virtual void post_force(int);
-  void reset_dt();
+  virtual void init();
+  virtual void initial_integrate(int);
+  virtual void final_integrate();
+  virtual double compute_vector(int);
+
   double memory_usage();
-  virtual void *extract(const char *, int &);
   void grow_arrays(int);
-  void copy_arrays(int, int, int);
-  int pack_exchange(int, double *);
-  int unpack_exchange(int, double *);
 
  protected:
-  double **save_velocity; //used to save peratom velocities
-  double **save_random; //used to save peratom random numbers
-  double **array;
-  int lastindex_v, firstindex_r;
-  int nmax;
-  int restart;
-  double norm;
+  double dtv,dtf, int_a,int_b;
+  double t_target;
+
+  FILE * input;
+  char* keyword;
+  int memory_flag;
   
-  double t_target,tsqrt;
-  int pot_count;
-  FILE * pot_file;
-  double *pot_tabulated,*dist_tabulated, *phi_tabulated;
-  double rcut, r2cut;
-  int mem_count;
-  FILE * mem_file;
-  double *mem_kernel;
+  double dStart,dStep,dStop;
+  int Nd;
+  double tStart,tStep,tStop;
+  int Nt;
+  int Niter;
+  int d,d2;
+  
+  double *self_data;
+  double *cross_data;
+  
+  int isInitialized;
+  int Nupdate;
+  double **ran;
+  double **fd;
+  double **fr;
+  double **x_save;
+  double **x_save_update;
+  int lastindexN,lastindexn;
+  double **fc;
 
   class RanMars *random;
-  class RanCor *random_correlator;
-  int seed;
-  double precision;
-
-  void read_mem_file();
-  void read_pot_file();
+  
+  // cholsky decomp
+  std::vector<Eigen::SparseMatrix<double> > A;
+  std::vector<Eigen::SparseMatrix<double> > a;
+  
+  // neighbor list
+  int irequest;
+  NeighList *list;
+ 
+  
+  // Timing 
+  int me;
+  double t1,t2;
+  double time_read;
+  double time_init;
+  double time_int_rel1;
+  double time_dist_update;
+    double time_matrix_update;
+  double time_forwardft;
+  double time_chol;
+  double time_chol_analyze;
+  double time_chol_factorize;
+  double time_backwardft;
+  double time_int_rel2;
+  double time_test;
+  
+  void read_input();
+  void update_cholesky();
+  
+ private:
+  inline int sbmask(int j) {
+    return j >> SBBITS & 3;
+  }
 };
 
 }
@@ -80,61 +121,36 @@ Self-explanatory.  Check the input script syntax and compare to the
 documentation for the command.  You can use -echo screen as a
 command-line option when running LAMMPS to see the offending line.
 
-E: Fix langevin period must be > 0.0
-
-The time window for temperature relaxation must be > 0
-
-W: Energy tally does not account for 'zero yes'
-
-The energy removed by using the 'zero yes' flag is not accounted
-for in the energy tally and thus energy conservation cannot be
-monitored in this case.
-
-E: Fix langevin omega requires atom style sphere
+E: Fix gld series type must be pprony for now
 
 Self-explanatory.
 
-E: Fix langevin angmom requires atom style ellipsoid
+E: Fix gld prony terms must be > 0
 
 Self-explanatory.
 
-E: Variable name for fix langevin does not exist
+E: Fix gld start temperature must be >= 0
 
 Self-explanatory.
 
-E: Variable for fix langevin is invalid style
-
-It must be an equal-style variable.
-
-E: Fix langevin omega requires extended particles
-
-One of the particles has radius 0.0.
-
-E: Fix langevin angmom requires extended particles
-
-This fix option cannot be used with point paritlces.
-
-E: Cannot zero GLE force of 0 atoms
-
-The group has zero atoms, so you cannot request its force
-be zeroed.
-
-E: Fix langevin variable returned negative temperature
+E: Fix gld stop temperature must be >= 0
 
 Self-explanatory.
 
-E: Could not find fix_modify temperature ID
+E: Fix gld needs more prony series coefficients
 
-The compute ID for computing temperature does not exist.
+Self-explanatory.
 
-E: Fix_modify temperature ID does not compute temperature
+E: Fix gld c coefficients must be >= 0
 
-The compute ID assigned to the fix must compute temperature.
+Self-explanatory.
 
-W: Group for fix_modify temp != fix group
+E: Fix gld tau coefficients must be > 0
 
-The fix_modify command is specifying a temperature computation that
-computes a temperature on a different group of atoms than the fix
-itself operates on.  This is probably not what you want to do.
+Self-explanatory.
+
+E: Cannot zero gld force for zero atoms
+
+There are no atoms currently in the group.
 
 */

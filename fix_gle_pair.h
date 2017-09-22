@@ -89,15 +89,14 @@ class FixGLEPair : public Fix {
   double time_read;
   double time_init;
   double time_int_rel1;
-  double time_dist_update;
-    double time_matrix_update;
+  double time_noise;
+  double time_matrix_update;
   double time_forwardft;
-  double time_chol;
-  double time_chol_analyze;
-  double time_chol_factorize;
-  double time_backwardft;
+  double time_eigenvalues;
+  double time_chebyshev;
+  double time_final_noise;
+  double time_dist_update;
   double time_int_rel2;
-  double time_test;
   
   void read_input();
   void update_cholesky();

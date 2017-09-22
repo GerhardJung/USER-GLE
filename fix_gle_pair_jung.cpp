@@ -101,15 +101,8 @@ FixGLEPairJung::FixGLEPairJung(LAMMPS *lmp, int narg, char **arg) :
   time_read = 0.0;
   time_init = 0.0;
   time_int_rel1 = 0.0;
-  time_dist_update = 0.0;
-  time_matrix_update = 0.0;
-  time_forwardft= 0.0;
-  time_chol= 0.0;
-  time_chol_analyze= 0.0;
-  time_chol_factorize= 0.0;
-  time_backwardft= 0.0;
+  time_noise = 0.0;
   time_int_rel2 = 0.0;
-  time_test = 0.0;
   
   // read input file
   t1 = MPI_Wtime();
@@ -307,9 +300,9 @@ void FixGLEPairJung::initial_integrate(int vflag)
     n--;
     if (n==-1) n=2*Nt-3;
   }
-  printf("without FT\n");
+  //printf("without FT\n");
   for (int i = 0; i < nlocal; i++) {
-    printf("%f %f %f\n",fr[i][0],fr[i][1],fr[i][2]);
+    //printf("%f %f %f\n",fr[i][0],fr[i][1],fr[i][2]);
   }
   
   // determine dissipative contribution
@@ -354,6 +347,7 @@ void FixGLEPairJung::initial_integrate(int vflag)
   if (lastindexn == Nt) lastindexn = 0;
 
   // Check whether Cholesky Update is necessary
+  t1 = MPI_Wtime();
   double dr_max = 0.0;
   double dx,dy,dz,rsq;
   for (int i = 0; i < nlocal; i++) {
@@ -374,7 +368,8 @@ void FixGLEPairJung::initial_integrate(int vflag)
     }
     //update_cholesky();
   }
-  
+  t2 = MPI_Wtime();
+  time_noise += t2 -t1;
   t1 = MPI_Wtime();
   
   // Update positions
@@ -451,20 +446,13 @@ void FixGLEPairJung::final_integrate()
   time_int_rel2 += t2 -t1;
   
       // print timing
-  if (update->nsteps == update->ntimestep || update->ntimestep % 100000 == 0) {
+  if (update->nsteps == update->ntimestep || update->ntimestep % 10000 == 0) {
     printf("Update %d times\n",Nupdate);
     printf("processor %d: time(read) = %f\n",me,time_read);
     printf("processor %d: time(init) = %f\n",me,time_init);
     printf("processor %d: time(int_rel1) = %f\n",me,time_int_rel1);
-    printf("processor %d: time(matrix_update) = %f\n",me,time_matrix_update);
-    printf("processor %d: time(forward_ft) = %f\n",me,time_forwardft);
-    printf("processor %d: time(cholesky) = %f\n",me,time_chol);
-     printf("processor %d: time(cholesky_analyze) = %f\n",me,time_chol_analyze);
-     printf("processor %d: time(cholesky_factorize) = %f\n",me,time_chol_factorize);
-    printf("processor %d: time(backward_ft) = %f\n",me,time_backwardft);
-    printf("processor %d: time(dist_update) = %f\n",me,time_dist_update);
+    printf("processor %d: time(noise) = %f\n",me,time_noise);
     printf("processor %d: time(int_rel2) = %f\n",me,time_int_rel2);
-    printf("processor %d: time(test) = %f\n",me,time_test);
   }
   
 
@@ -627,7 +615,6 @@ void FixGLEPairJung::update_cholesky()
   int non_zero=0;
   int *row;
   int *col;
-  double t1 = MPI_Wtime();
   std::vector<T> tripletList;
   A.clear();
   a.clear();
@@ -688,8 +675,6 @@ void FixGLEPairJung::update_cholesky()
   }
   //printf("non_zero %d\n",non_zero);
   delete [] dr;
-  double t2 = MPI_Wtime();
-  time_matrix_update += t2 -t1;
   
   // init column and row indices
   row = new int[non_zero];
@@ -709,7 +694,7 @@ void FixGLEPairJung::update_cholesky()
   kiss_fft_cpx * bufout;
   buf=(kiss_fft_scalar*)KISS_FFT_MALLOC(sizeof(kiss_fft_scalar)*N*non_zero);
   bufout=(kiss_fft_cpx*)KISS_FFT_MALLOC(sizeof(kiss_fft_cpx)*N*non_zero);
-  t1 = MPI_Wtime();
+
   for (int t=0; t<Nt; t++) {
     int counter = 0;
     for (int k=0; k<A[t].outerSize(); ++k) {
@@ -723,17 +708,14 @@ void FixGLEPairJung::update_cholesky()
       }
     }
   }
-  t2 = MPI_Wtime();
-  time_matrix_update += t2 -t1;
+
   // do the fft with kiss_fft
   kiss_fftr_cfg st = kiss_fftr_alloc( N ,0 ,0,0);
-  t1 = MPI_Wtime();
+
   for (int i=0; i<non_zero;i++) {
     kiss_fftr( st ,&buf[i*N],&bufout[i*N] );
   }
-  t2 = MPI_Wtime();
-  time_forwardft += t2 -t1;
-  t1 = MPI_Wtime();
+
   std::vector<Eigen::SparseMatrix<double> > A_FT;
   std::vector<Eigen::SparseMatrix<double> > a_FT;
   //printf("FT_A\n");
@@ -747,54 +729,49 @@ void FixGLEPairJung::update_cholesky()
     A_FT.push_back(A_FT0_sparse);
     //cout << A_FT0_sparse;
   }
-  t2 = MPI_Wtime();
-  time_matrix_update += t2 -t1;
+
   //printf("-------------------------------\n");
   
   // step 2: perform sparse cholesky decomposition for every Aw
-  t1 = MPI_Wtime();
+
   //printf("FT_a\n");
   for (int t=0; t<Nt; t++) {
-    double t1 = MPI_Wtime();
+
     Eigen::SimplicialLLT<Eigen::SparseMatrix<double> > A_comp_full(A_FT[t]); // compute the sparse Cholesky decomposition of A
-    Eigen::IncompleteCholesky<double> A_comp; // compute the sparse Cholesky decomposition of A
+    //Eigen::IncompleteCholesky<double> A_comp; // compute the sparse Cholesky decomposition of A
     if (t==0) {
-      Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> Tk_eigen(A_FT[0]);
-      printf("theory: min %f max %f\n",Tk_eigen.eigenvalues().real()(0),Tk_eigen.eigenvalues().real()(nlocal*d-1));
+      //Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> Tk_eigen(A_FT[0]);
+      //printf("theory: min %f max %f\n",Tk_eigen.eigenvalues().real()(0),Tk_eigen.eigenvalues().real()(nlocal*d-1));
     }
     //A_comp.setInitialShift(0.0001);
-    A_comp.compute(A_FT[t]);
+    //A_comp.compute(A_FT[t]);
     //A_comp.analyzePattern(A_FT[t]);
-    double t2 = MPI_Wtime();
-    time_chol_analyze += t2 -t1;
-    t1 = MPI_Wtime();
+
     //A_comp.factorize(A_FT[t]);
     
-    if (A_comp.info()!=0) {
-      error->all(FLERR,"LLT Cholesky not possible!\n");
-    }
+    //if (A_comp.info()!=0) {
+    //  error->all(FLERR,"LLT Cholesky not possible!\n");
+    //}
     Eigen::SparseMatrix<double> a_FT0_sparse_full = A_comp_full.matrixL().transpose();
-    Eigen::SparseMatrix<double> a_FT0_sparse = A_comp.matrixL().transpose();
+    //Eigen::SparseMatrix<double> a_FT0_sparse = A_comp.matrixL().transpose();
     // result matrix has to be permuted
     a_FT0_sparse_full = a_FT0_sparse_full*A_comp_full.permutationP();
-    a_FT0_sparse = a_FT0_sparse*A_comp.permutationP()*sqrt(A_FT[t].coeffRef(0,0));
-    t2 = MPI_Wtime();
-    time_chol_factorize += t2 -t1;
+    //a_FT0_sparse = a_FT0_sparse*A_comp.permutationP()*sqrt(A_FT[t].coeffRef(0,0));
+
     //a_FT0_sparse = A_FT[t];
 
-    /*if (t==0) {
-      printf("%d\n",t);
-      cout << A_FT[t] << endl;
+    //if (t==0) {
+      //printf("%d\n",t);
+      //cout << A_FT[t] << endl;
       //cout << a_FT0_sparse << endl;
-      cout << a_FT0_sparse_full << endl;
-      cout << a_FT0_sparse.transpose()*a_FT0_sparse << endl;
-    }*/
+      //cout << a_FT0_sparse_full << endl;
+      //cout << a_FT0_sparse.transpose()*a_FT0_sparse << endl;
+    //}
    
     a_FT.push_back(a_FT0_sparse_full);
   }
 
-  t2 = MPI_Wtime();
-  time_chol += t2 -t1;
+
   //printf("done\n");
   
   // reinit column and row indices, since (incomplete) cholesky has different from for the different matrices
@@ -818,7 +795,7 @@ void FixGLEPairJung::update_cholesky()
   buf=(kiss_fft_scalar*)KISS_FFT_MALLOC(sizeof(kiss_fft_scalar)*N*non_zero);
   bufout=(kiss_fft_cpx*)KISS_FFT_MALLOC(sizeof(kiss_fft_cpx)*N*non_zero);
   
-  //t1 = MPI_Wtime();
+
   for (int t=0; t<Nt; t++) {
     int counter = 0;
     for (int k=0; k<a_FT_iterator.outerSize(); ++k) {
@@ -835,8 +812,7 @@ void FixGLEPairJung::update_cholesky()
       }
     }
   }
-  //t2 = MPI_Wtime();
-  time_matrix_update += t2 -t1;
+
   A_FT.clear();
 
   
@@ -846,19 +822,16 @@ void FixGLEPairJung::update_cholesky()
   for (int i=0; i<non_zero;i++) {
     kiss_fftri( sti ,&bufout[i*N],&buf[i*N]);
   }
-  t2 = MPI_Wtime();
-  time_backwardft += t2 -t1;
+
   free(st); free(sti);
   kiss_fft_cleanup();
-  t1 = MPI_Wtime();
+
   tripletList.clear();
   //printf("a\n");
   for (int t=0; t<N; t++) {
     Eigen::SparseMatrix<double> a0_sparse(nlocal*d,nlocal*d);
     int ind = t+Nt-1;
     if (ind >= N) ind -= N;
-    int tp = ind;
-    if (tp >= Nt) tp = N -tp;
     counter = 0;
     for (int k=0; k<a_FT_iterator.outerSize(); ++k) {
       for (SparseMatrix<double>::InnerIterator it(a_FT_iterator,k); it; ++it) {
@@ -878,13 +851,13 @@ void FixGLEPairJung::update_cholesky()
     //printf("%d\n",t);
     // cout << a0_sparse << endl;
   }
-  t2 = MPI_Wtime();
-  time_matrix_update += t2 -t1;
+
   //printf("-------------------------------\n");
   free(buf); free(bufout);
   
-  /* TEST: determine noise in Fourier-space */
-  buf=(kiss_fft_scalar*)KISS_FFT_MALLOC(sizeof(kiss_fft_scalar)*d*nlocal*N);
+  
+   //determine noise in Fourier-space 
+  /*buf=(kiss_fft_scalar*)KISS_FFT_MALLOC(sizeof(kiss_fft_scalar)*d*nlocal*N);
   bufout=(kiss_fft_cpx*)KISS_FFT_MALLOC(sizeof(kiss_fft_cpx)*d*nlocal*N);
   kiss_fft_scalar * buf1;
   kiss_fft_cpx * bufout1;
@@ -899,7 +872,7 @@ void FixGLEPairJung::update_cholesky()
     for (int i=0; i<d*nlocal;i++) {
       buf[i*N+t]=ran[n][i];
       for (int j=0; j<d*nlocal;j++) {
-	buf1[i*N*d*nlocal+j*N+t]=a[t].coeffRef(i,j);
+	buf1[i*N*d*nlocal+j*N+t]=a[t].coeffRef(j,i);
       }
     }
     n--;
@@ -915,7 +888,7 @@ void FixGLEPairJung::update_cholesky()
       }
     }
   }
-  for (int i=0; i<d*nlocal;i++) printf("direct %f\n",res[i]);
+  //for (int i=0; i<d*nlocal;i++) printf("direct %f\n",res[i]*sqrt(update->dt));
   // FFT evaluation
   st = kiss_fftr_alloc( N ,0 ,0,0);
   for (int i=0; i<d*nlocal;i++) {
@@ -924,6 +897,17 @@ void FixGLEPairJung::update_cholesky()
 	kiss_fftr( st ,&buf1[i*N*d*nlocal+j*N],&bufout1[i*N*d*nlocal+j*N] );
       }
   }
+  //for (int t = 0; t < N; t++) {
+    for (int i=0; i<d*nlocal;i++) {
+      for (int j=0; j<d*nlocal;j++) {
+	//printf("%f ",bufout1[i*N*d*nlocal+j*N].r);
+      }
+      //printf("\n");
+    }
+    //printf("\n");
+  //}
+  
+  
   // Multiplication
   for (int t = 0; t < N; t++) {
   for (int i=0; i<d*nlocal;i++) {
@@ -937,58 +921,20 @@ void FixGLEPairJung::update_cholesky()
 	bufout_res[i*N+t].r += bufout[j*N+t].r*bufout1[i*N*d*nlocal+j*N+t].r+bufout[j*N+t].i*bufout1[i*N*d*nlocal+j*N+t].i;
 	bufout_res[i*N+t].i += bufout[j*N+t].r*bufout1[i*N*d*nlocal+j*N+t].i-bufout[j*N+t].i*bufout1[i*N*d*nlocal+j*N+t].r;
       }
+      
     }
   }
+  for (int i=0; i<d*nlocal;i++) {
+    //printf("%f %f\n",bufout_res[i*N].r,bufout[i*N].r);
+  }
+  
   //backward transformation
   sti = kiss_fftr_alloc( N ,1 ,0,0);
   for (int i=0; i<d*nlocal;i++) {
     kiss_fftri( sti ,&bufout_res[i*N],&buf_res[i*N] );
   }
-    printf("test\n");
-  for (int i=0; i<d*nlocal;i++) printf("indirect %f\n",buf_res[i*N]/N);
-   printf("test\n");
-  
-  /*std::vector<VectorXcd> W_FT;
-  //printf("FT_A\n");
-  for (int t=0; t<N; t++) {
-    VectorXcd W_FT0(nlocal*d);
-    for (int i=0; i<d*nlocal;i++) {
-      //printf("%f %fi\n",bufout[i*N+t].r,bufout[i*N+t].i);
-      W_FT0(i).real(bufout[i*N+t].r);
-      W_FT0(i).imag(bufout[i*N+t].i);
-    } 
-    W_FT.push_back(W_FT0);
-  }
-  // multiply with FT_noise matrix
-  std::vector<VectorXcd> noise_FT;
-  for (int t=0; t<N; t++) {
-    int ind = t;
-    if (t>=Nt) ind = N-t;
-    VectorXcd noise_FT0(nlocal*d);
-    noise_FT0 = a_FT[ind]*W_FT[t];
-    noise_FT.push_back(noise_FT0);
-  }
-  
-  // transform back
-  for (int t=0; t<N; t++) {
-    for (int i=0; i<d*nlocal;i++) {
-      bufout[i*N+t].r = noise_FT[t](i).real();
-      bufout[i*N+t].i = noise_FT[t](i).imag();
-    }
-  }
-  sti = kiss_fftr_alloc( N ,1 ,0,0);
-  t1 = MPI_Wtime();
-  for (int i=0; i<d*nlocal;i++) {
-    kiss_fftri( sti ,&bufout[i*N],&buf[i*N]);
-  }
-  // report result
-  for (int t=0; t<N; t++) {
-    for (int i=0; i<nlocal;i++) {
-        //printf("%f %f %f\n",buf[(3*i+0)*N+t]*sqrt(update->dt)/N,buf[(3*i+1)*N+t]*sqrt(update->dt)/N,buf[(3*i+2)*N+t]*sqrt(update->dt)/N);
-      
-    }
-  }*/
-
+  //for (int i=0; i<d*nlocal;i++) printf("indirect %f\n",buf_res[i*N]/N*sqrt(update->dt));
+  */
   a_FT.clear();
   
 

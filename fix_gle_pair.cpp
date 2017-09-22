@@ -102,15 +102,14 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
   time_read = 0.0;
   time_init = 0.0;
   time_int_rel1 = 0.0;
-  time_dist_update = 0.0;
+  time_noise = 0.0;
   time_matrix_update = 0.0;
-  time_forwardft= 0.0;
-  time_chol= 0.0;
-  time_chol_analyze= 0.0;
-  time_chol_factorize= 0.0;
-  time_backwardft= 0.0;
+  time_forwardft = 0.0;
+  time_eigenvalues = 0.0;
+  time_chebyshev = 0.0;
+  time_final_noise = 0.0;
+  time_dist_update = 0.0;
   time_int_rel2 = 0.0;
-  time_test = 0.0;
   
   // read input file
   t1 = MPI_Wtime();
@@ -297,7 +296,7 @@ void FixGLEPair::initial_integrate(int vflag)
   int n = lastindexN;
   int N = 2*Nt -2;
   double sqrt_dt=sqrt(update->dt);
-  for (int t = 0; t < N; t++) {
+  /*for (int t = 0; t < N; t++) {
     for (int k=0; k<a[t].outerSize(); ++k) {
       int dim = k%d;
       int i = (k-dim)/d;
@@ -307,7 +306,7 @@ void FixGLEPair::initial_integrate(int vflag)
     }
     n--;
     if (n==-1) n=2*Nt-3;
-  }
+  }*/
   
   // determine dissipative contribution
   n = lastindexn;
@@ -337,10 +336,10 @@ void FixGLEPair::initial_integrate(int vflag)
       meff = mass[type[i]];   
       //printf("x: %f f: %f fd: %f fr: %f\n",x[i][0],f_step[i][0],fd[i],fr[i]);
       for (int dim1=0; dim1<d; dim1++) { 
-	x[i][dim1] += int_b * update->dt * v[i][dim1] 
+	/*x[i][dim1] += int_b * update->dt * v[i][dim1] 
 	  + int_b * update->dt * update->dt / 2.0 / meff * fc[i][dim1] 
 	  - int_b * update->dt / meff/ 2.0 * fd[i][dim1]
-	  + int_b*update->dt/ 2.0 / meff * fr[i][dim1]; // convection, conservative, dissipative, random
+	  + int_b*update->dt/ 2.0 / meff * fr[i][dim1]; // convection, conservative, dissipative, random*/
       }
     }
   }
@@ -349,7 +348,7 @@ void FixGLEPair::initial_integrate(int vflag)
   if (lastindexN == 2*Nt-2) lastindexN = 0;
   lastindexn++;
   if (lastindexn == Nt) lastindexn = 0;
-
+  t1 = MPI_Wtime();
   // Check whether Cholesky Update is necessary
   double dr_max = 0.0;
   double dx,dy,dz,rsq;
@@ -371,6 +370,8 @@ void FixGLEPair::initial_integrate(int vflag)
     }
     update_cholesky();
   }
+  t2 = MPI_Wtime();
+  time_noise += t2 -t1;
   
   t1 = MPI_Wtime();
   
@@ -448,20 +449,18 @@ void FixGLEPair::final_integrate()
   time_int_rel2 += t2 -t1;
   
       // print timing
-  if (update->nsteps == update->ntimestep || update->ntimestep % 100000 == 0) {
+  if (update->nsteps == update->ntimestep || update->ntimestep % 10000 == 0) {
     printf("Update %d times\n",Nupdate);
     printf("processor %d: time(read) = %f\n",me,time_read);
     printf("processor %d: time(init) = %f\n",me,time_init);
     printf("processor %d: time(int_rel1) = %f\n",me,time_int_rel1);
+    printf("processor %d: time(noise) = %f\n",me,time_noise);
     printf("processor %d: time(matrix_update) = %f\n",me,time_matrix_update);
-    printf("processor %d: time(forward_ft) = %f\n",me,time_forwardft);
-    printf("processor %d: time(cholesky) = %f\n",me,time_chol);
-     printf("processor %d: time(cholesky_analyze) = %f\n",me,time_chol_analyze);
-     printf("processor %d: time(cholesky_factorize) = %f\n",me,time_chol_factorize);
-    printf("processor %d: time(backward_ft) = %f\n",me,time_backwardft);
-    printf("processor %d: time(dist_update) = %f\n",me,time_dist_update);
+    printf("processor %d: time(forwardft) = %f\n",me,time_forwardft);
+    printf("processor %d: time(eigenvalues) = %f\n",me,time_eigenvalues);
+    printf("processor %d: time(chebyshev) = %f\n",me,time_chebyshev);
+    printf("processor %d: time(final_noise) = %f\n",me,time_final_noise);
     printf("processor %d: time(int_rel2) = %f\n",me,time_int_rel2);
-    printf("processor %d: time(test) = %f\n",me,time_test);
   }
   
 
@@ -686,7 +685,7 @@ void FixGLEPair::update_cholesky()
   //printf("non_zero %d\n",non_zero);
   delete [] dr;
   double t2 = MPI_Wtime();
-  time_matrix_update += t2 -t1;
+  time_matrix_update += t2-t1;
   
   // init column and row indices
   row = new int[non_zero];
@@ -706,6 +705,7 @@ void FixGLEPair::update_cholesky()
   kiss_fft_cpx * bufout;
   buf=(kiss_fft_scalar*)KISS_FFT_MALLOC(sizeof(kiss_fft_scalar)*N*non_zero);
   bufout=(kiss_fft_cpx*)KISS_FFT_MALLOC(sizeof(kiss_fft_cpx)*N*non_zero);
+  memset(bufout,0,sizeof(kiss_fft_cpx)*N*non_zero);
   t1 = MPI_Wtime();
   for (int t=0; t<Nt; t++) {
     int counter = 0;
@@ -720,34 +720,38 @@ void FixGLEPair::update_cholesky()
       }
     }
   }
-  t2 = MPI_Wtime();
-  time_matrix_update += t2 -t1;
+
   // do the fft with kiss_fft
   kiss_fftr_cfg st = kiss_fftr_alloc( N ,0 ,0,0);
-  t1 = MPI_Wtime();
+
   for (int i=0; i<non_zero;i++) {
     kiss_fftr( st ,&buf[i*N],&bufout[i*N] );
   }
-  t2 = MPI_Wtime();
-  time_forwardft += t2 -t1;
-  t1 = MPI_Wtime();
+
+  free(st);
+
   std::vector<Eigen::SparseMatrix<double> > A_FT;
   //printf("FT_A\n");
   for (int t=0; t<Nt; t++) {
     Eigen::SparseMatrix<double> A_FT0_sparse(nlocal*d,nlocal*d);
+    //printf("\n%d ",t);
     for (int i=0; i<non_zero;i++) {
       tripletList.push_back(T(row[i],col[i],bufout[i*N+t].r));
+      //printf("%f %f ",bufout[i*N+t].r,buf[i*N+t]);
     }
     A_FT0_sparse.setFromTriplets(tripletList.begin(), tripletList.end());
     tripletList.clear();
     A_FT.push_back(A_FT0_sparse);
     //cout << A_FT0_sparse;
   }
+  delete [] row;
+  delete [] col;
   t2 = MPI_Wtime();
-  time_matrix_update += t2 -t1;
+  time_forwardft += t2-t1;
   //printf("-------------------------------\n");
   
   // step 2: determine eigenvalue bounds of A_FT matrices
+  t1 = MPI_Wtime();
   int mLanczos = 20;
   int size = d*nlocal;
   double tolLanczos = 0.000001;
@@ -755,7 +759,9 @@ void FixGLEPair::update_cholesky()
   VectorXd wk = VectorXd::Zero(size);
   double *alpha = new double[mLanczos];
   double *beta = new double[mLanczos];
-  double evMax=0.0, evMin=0.0, evMaxm1=0.0, evMinm1= 0.0;
+  double *evMax = new double[N];
+  double *evMin = new double[N];
+  double evMaxm1=0.0, evMinm1= 0.0;
   // generate random vector v and normalize
   double norm = 0.0, random=0.0;
   for (int k=0; k<mLanczos; k++) {
@@ -773,185 +779,333 @@ void FixGLEPair::update_cholesky()
   }
   int k;
   // main safeguarded Lanczos loop, determine eigenvalue bounds
-  for (k=1; k<mLanczos; k++) {
-    wk = A_FT[0]*vk[k-1];
-    if (k>=2) wk -= beta[k-1]*vk[k-2];
-    alpha[k-1] = (wk.adjoint()*vk[k-1]).value();
-    // rescale w
-    wk -= alpha[k-1]*vk[k-1];
-    beta[k] = wk.norm();
-    // set new v
-    vk[k] = wk.normalized(); 
+  for (int t=0; t<Nt; t++) {
+    evMax[t] = evMin[t] = 0.0;
+    for (k=1; k<mLanczos; k++) {
+      wk = A_FT[t]*vk[k-1];
+      if (k>=2) wk -= beta[k-1]*vk[k-2];
+      alpha[k-1] = (wk.adjoint()*vk[k-1]).value();
+      // rescale w
+      wk -= alpha[k-1]*vk[k-1];
+      beta[k] = wk.norm();
+      // set new v
+      vk[k] = wk.normalized(); 
 
-    //printf("Lanczos Step %d: alpha %f, beta %f evMin %f, evMax %f\n",k,alpha[k-1],beta[k],evMin,evMax);
-    if (k>=2) {
-      //generate eigenvalues/eigenvectors and check whether they fullfill the tolerance
-      Eigen::MatrixXd Tk = Eigen::MatrixXd::Zero(k,k);
-      for (int i=0; i<k; i++) {
-	for (int j=0; j<k; j++) {
-	  if (i==j) Tk(i,j) = alpha[i];
-	  if (i==j+1||i==j-1) {
-	    int kprime = j;
-	    if (i>j) kprime = i;
-	    Tk(i,j) = beta[kprime];
+      //printf("Lanczos Step %d: alpha %f, beta %f evMin %f, evMax %f\n",k,alpha[k-1],beta[k],evMin,evMax);
+      if (k>=2) {
+	//generate eigenvalues/eigenvectors and check whether they fullfill the tolerance
+	Eigen::MatrixXd Tk = Eigen::MatrixXd::Zero(k,k);
+	for (int i=0; i<k; i++) {
+	  for (int j=0; j<k; j++) {
+	    if (i==j) Tk(i,j) = alpha[i];
+	    if (i==j+1||i==j-1) {
+	      int kprime = j;
+	      if (i>j) kprime = i;
+	      Tk(i,j) = beta[kprime];
+	    }
 	  }
 	}
-      }
-      //printf("Tk-Matrix\n");
-      //cout << Tk << endl;
-      Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> Tk_eigen(Tk);
-      Eigen::MatrixXd Tk_eigenvector = Tk_eigen.eigenvectors().real();
-      /*double norm = 0.0;
-      for (int i=0; i<size; i++){
-	double norm_loc = 0.0;
-	for (int kloc=0; kloc<k; kloc++) {
-	  norm_loc += Tk_eigenvector(kloc,0)*vk[kloc*size+i];
-	  //printf("%f ",norm_loc);
-	}
-	//printf("\n");
-	norm += norm_loc*norm_loc;
-      }
-      printf("Test Qk %f\n",norm);*/
-      //Test Matrix
-      /*for (int i=0; i<size;i++) {
-	for (int kloc=0; kloc<k; kloc++) {
-	  //left side
-	  double result_left = 0.0;
-	  for (int j=0; j<size;j++) {
-	    result_left += A(i,j) * vk[kloc*size+j];
+	//printf("Tk-Matrix\n");
+	//cout << Tk << endl;
+	Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> Tk_eigen(Tk);
+	Eigen::MatrixXd Tk_eigenvector = Tk_eigen.eigenvectors().real();
+	double mu_min = 999999.0;
+	double mu_max = 0.0;
+	int i_min=0, i_max=0;
+	for (int i=0; i<k; i++){
+	  double ev_loc = Tk_eigen.eigenvalues().real()(i);
+	  //printf("%f\n",Tk_eigen.eigenvalues().real()(i));
+	  if (ev_loc < mu_min) {
+	    mu_min = ev_loc;
+	    i_min = i;
 	  }
-	  //right side
-	  double result_right = 0.0;
-	  for (int kloc2=0; kloc2<k;kloc2++) {
-	    result_right += vk[kloc2*size+i]*Tk(kloc2,kloc);
+	  if (ev_loc > mu_max) {
+	    mu_max = ev_loc;
+	    i_max = i;
 	  }
-	  if (kloc == k-1)
-	    result_right += wk[i];
-	  printf("Test Eq: %f = %f\n",result_left,result_right);
 	}
-      }*/
-      //printf("Tk-Eigenmatrix\n");
-      //cout << Tk_eigenvector << endl;
-      double mu_min = 999999.0;
-      double mu_max = 0.0;
-      int i_min=0, i_max=0;
-      for (int i=0; i<k; i++){
-	double ev_loc = Tk_eigen.eigenvalues().real()(i);
-	//printf("%f\n",Tk_eigen.eigenvalues().real()(i));
-	if (ev_loc < mu_min) {
-	  mu_min = ev_loc;
-	  i_min = i;
-	}
-	if (ev_loc > mu_max) {
-	  mu_max = ev_loc;
-	  i_max = i;
-	}
+	evMaxm1 = evMax[t];
+	evMinm1 = evMin[t];
+	//printf("Lanczos Step %d: evMax %f, evMin %f \n",k,mu_max,mu_min);
+	evMax[t] = mu_max + sqrt(Tk_eigenvector(k-1,i_max)*Tk_eigenvector(k-1,i_max))*beta[k];
+	evMin[t] = mu_min - sqrt(Tk_eigenvector(k-1,i_min)*Tk_eigenvector(k-1,i_min))*beta[k];
+	//printf("Lanczos Step %d: evMax %f, evMin %f \n",k,evMax,evMin);
+	if( sqrt((evMax[t]-evMaxm1)*(evMax[t]-evMaxm1))/evMaxm1 < tolLanczos ) break;
       }
-      evMaxm1 = evMax;
-      evMinm1 = evMin;
-      //printf("Lanczos Step %d: evMax %f, evMin %f \n",k,mu_max,mu_min);
-      evMax = mu_max + sqrt(Tk_eigenvector(k-1,i_max)*Tk_eigenvector(k-1,i_max))*beta[k];
-      evMin = mu_min - sqrt(Tk_eigenvector(k-1,i_min)*Tk_eigenvector(k-1,i_min))*beta[k];
-      //printf("Lanczos Step %d: evMax %f, evMin %f \n",k,evMax,evMin);
-      if( sqrt((evMax-evMaxm1)*(evMax-evMaxm1))/evMaxm1 < tolLanczos ) break;
     }
+    //cout << A_FT[t] << endl;
+    //printf("Lanczos EV-bounds %d: evMin = %f, evMax = %f\n",k,evMin[t],evMax[t]);
   }
-  printf("Lanczos EV-bounds %d: evMin = %f, evMax = %f\n",k,evMin,evMax);
+  delete [] alpha;
+  delete [] beta;
+  
+  t2 = MPI_Wtime();
+  time_eigenvalues += t2-t1;
   
   // step 3: determine Chebyshev coefficients by approximating the squareroot function
-  evMin = evMin/2;
-  evMax = evMax*2;
+  t1 = MPI_Wtime();
   int n;
-  int nmax = 10;
+  int nmax0 = 20;
+  int *nmax = new int[N];
+  double *ta = new double[N];
+  double *tb = new double[N];
+  double** c = new double*[N];
+  for (int t=0; t<Nt; t++) {
+    nmax[t] = nmax0;
+    c[t] = new double[nmax[t]+1];
+    for (n=0; n<=nmax0; n++) {
+      c[t][n] = 0.0;
+    }
+    ta[t] = 2.0/(evMax[t]-evMin[t]);
+    tb[t] = - (evMax[t]+evMin[t])/(evMax[t]-evMin[t]);
+  }
   int ntest = 100;
   double epsilon = 0.001;
   double epsilon_loc = 0.0;
-  double *x_test = new double[ntest];
-  for (int i=0; i< ntest; i++) {
-    double step = (evMax-evMin)/((double) ntest);
-    x_test[i] = evMin + step*i;
-  }
-  double *x0 = new double[nmax+1];
-  double ta = 2.0/(evMax-evMin);
-  double tb = - (evMax+evMin)/(evMax-evMin);
-  double *c = new double[nmax+1];
-  double *T = new double[nmax+1];
-  // check for the dgeree n of the polynomial
-  for (n=1; n<= nmax; n++) {
-    for (int l=0; l<=n; l++) {
-      x0[l] = (evMax+evMin)/2.0 + (evMax-evMin)/2.0*cos((((double)2.0*l)+1.0)*PI/(((double) 2.0*n)+2.0));
-    }
-    // determine ck
-    for (int k=0; k<=n; k++) {
-      c[k] = 0.0;
-      for (int l=0; l<=n; l++) {
-	// determine Tk(xl)
-	T[0] = 1.0;
-	T[1] = ta*x0[l] + tb;
-	for (int kloc = 2; kloc<=k; kloc++ ) {
-	  T[kloc] = 2*(ta*x0[l] + tb)*T[kloc-1]-T[kloc-2];
-	}
-	c[k] += 2.0/(((double) n)+1)*sqrt(x0[l])*T[k];
-      }
-    }
-    // check accuricy
-    //printf("n %d: ",n);
-    epsilon_loc = 0.0;
+  for (int t=0; t<Nt; t++) {
+    double *x_test = new double[ntest];
     for (int i=0; i< ntest; i++) {
-      double pnx = 0.0;
+      double step = (evMax[t]-evMin[t])/((double) ntest);
+      x_test[i] = evMin[t] + step*i;
+    }
+    double *x0 = new double[nmax[t]+1];
+    double *T = new double[nmax[t]+1];
+    // check for the dgeree n of the polynomial
+    for (n=1; n< nmax[t]; n++) {
+      for (int l=0; l<=n; l++) {
+	x0[l] = (evMax[t]+evMin[t])/2.0 + (evMax[t]-evMin[t])/2.0*cos((((double)2.0*l)+1.0)*PI/(((double) 2.0*n)+2.0));
+      }
+      // determine ck
       for (int k=0; k<=n; k++) {
-	T[0] = 1.0;
-	T[1] = ta*x_test[i] + tb;
-	for (int kloc = 2; kloc<=k; kloc++ ) {
-	  T[kloc] = 2*(ta*x_test[i] + tb)*T[kloc-1]-T[kloc-2];
-	}
-	pnx += c[k]*T[k];
-	// Test
-	if (k==n) {
-	  double TN = 2*(ta*x_test[i] + tb)*T[k]-T[k-1];
-	  //printf("TN %f = 0\n",TN);
+	c[t][k] = 0.0;
+	for (int l=0; l<=n; l++) {
+	  // determine Tk(xl)
+	  T[0] = 1.0;
+	  T[1] = ta[t]*x0[l] + tb[t];
+	  for (int kloc = 2; kloc<=k; kloc++ ) {
+	    T[kloc] = 2*(ta[t]*x0[l] + tb[t])*T[kloc-1]-T[kloc-2];
+	  }
+	  c[t][k] += 2.0/(((double) n)+1)*sqrt(x0[l])*T[k];
 	}
       }
-      pnx -= 0.5*c[0];
-      if ( sqrt((sqrt(x_test[i])-pnx)*(sqrt(x_test[i])-pnx)) > epsilon_loc ) epsilon_loc = sqrt((sqrt(x_test[i])-pnx)*(sqrt(x_test[i])-pnx));
-      //printf("%f/%f ",sqrt(x_test[i]),pnx);
+      // check accuricy
+      //printf("n %d: ",n);
+      epsilon_loc = 0.0;
+      for (int i=0; i< ntest; i++) {
+	double pnx = 0.0;
+	for (int k=0; k<=n; k++) {
+	  T[0] = 1.0;
+	  T[1] = ta[t]*x_test[i] + tb[t];
+	  for (int kloc = 2; kloc<=k; kloc++ ) {
+	    T[kloc] = 2*(ta[t]*x_test[i] + tb[t])*T[kloc-1]-T[kloc-2];
+	  }
+	  pnx += c[t][k]*T[k];
+	  // Test
+	  if (k==n) {
+	    double TN = 2*(ta[t]*x_test[i] + tb[t])*T[k]-T[k-1];
+	    //printf("TN %f = 0\n",TN);
+	  }
+	}
+	pnx -= 0.5*c[t][0];
+	if ( sqrt((sqrt(x_test[i])-pnx)*(sqrt(x_test[i])-pnx)) > epsilon_loc ) epsilon_loc = sqrt((sqrt(x_test[i])-pnx)*(sqrt(x_test[i])-pnx));
+	//printf("%f/%f ",sqrt(x_test[i]),pnx);
+      }
+      //printf("\n");
+      //printf("Chebyshev Step %d: Acc %f\n",n,epsilon_loc);
+      if (epsilon_loc < epsilon) break;
     }
-    //printf("\n");
-    //printf("Chebyshev Step %d: Acc %f\n",n,epsilon_loc);
-    if (epsilon_loc < epsilon) break;
+    //printf("Final degree: %d, Accuracy: %f\n",n,epsilon_loc);
+    nmax[t] = n+1;
+    delete [] x_test;
+    delete [] T;
+    delete [] x0;
   }
-  printf("Final degree: %d, Accuracy: %f\n",n,epsilon_loc);
-  nmax = n+1;
+  delete [] evMax;
+  delete [] evMin;
+  // determine maximal degree
+  int nmaxmax = 0;
+  for (int t=0; t<Nt; t++) {
+    if (nmax[t] > nmaxmax) nmaxmax = nmax[t];
+  }
+  t2 = MPI_Wtime();
+  time_chebyshev += t2-t1;
   
+  // step 40: determine FT noise vector
+  free(buf);
+  buf=(kiss_fft_scalar*)KISS_FFT_MALLOC(sizeof(kiss_fft_scalar)*size*N);
+  free(bufout);
+  bufout=(kiss_fft_cpx*)KISS_FFT_MALLOC(sizeof(kiss_fft_cpx)*size*N);
+   memset(bufout,0,sizeof(kiss_fft_cpx)*size*N);
+  int nt0 = lastindexN;
+  for (int t = 0; t < N; t++) {
+    int ind = Nt-1+t;
+    if (ind >= N) ind -= N;
+    for (int i=0; i<size;i++) {
+      buf[i*N+ind]=ran[nt0][i];
+    }
+    nt0--;
+    if (nt0==-1) nt0=2*Nt-3;
+  }  
+  // FFT evaluation
+  st = kiss_fftr_alloc( N ,0 ,0,0);
+  for (int i=0; i<size;i++) {
+    kiss_fftr( st ,&buf[i*N],&bufout[i*N] );
+  }
   // step 4a: (debugging) determine FT noise matrix FT_k
-  std::vector<Eigen::SparseMatrix<double> > a_FT;
-  Eigen::SparseMatrix<double> a_FT_loc0(size,size);
-  a_FT_loc0.setIdentity();
+  /*std::vector<std::vector<Eigen::SparseMatrix<double> > > a_FT;
+  std::vector<Eigen::SparseMatrix<double> > a_FT_loc0;
+  for (int t = 0; t < Nt; t++) {
+    Eigen::SparseMatrix<double> a_FT_loc0t(size,size);
+    a_FT_loc0t.setIdentity();
+    a_FT_loc0.push_back(a_FT_loc0t);
+  }
   a_FT.push_back(a_FT_loc0);
   //printf("test0\n");
-  Eigen::SparseMatrix<double> a_FT_loc1 = ta*A_FT[0] + tb*a_FT[0];
+  std::vector<Eigen::SparseMatrix<double> > a_FT_loc1;
+  for (int t = 0; t < Nt; t++) {
+    Eigen::SparseMatrix<double> a_FT_loc1t = ta[t]*A_FT[t]*a_FT[0][t] + tb[t]*a_FT[0][t];
+    a_FT_loc1.push_back(a_FT_loc1t);
+  }
   a_FT.push_back(a_FT_loc1);
   //printf("test\n");
-  for (int n=2; n<nmax; n++) {
-     Eigen::SparseMatrix<double> a_FT_locn = 2*ta*A_FT[0]*a_FT[n-1]+2*tb*a_FT[n-1]-a_FT[n-2];
+  for (int n=2; n<nmaxmax; n++) {
+    std::vector<Eigen::SparseMatrix<double> > a_FT_locn;
+    for (int t = 0; t < Nt; t++) {
+      Eigen::SparseMatrix<double> a_FT_locnt = 2*ta[t]*A_FT[t]*a_FT[n-1][t]+2*tb[t]*a_FT[n-1][t]-a_FT[n-2][t];
+      a_FT_locn.push_back(a_FT_locnt);
+    }
     a_FT.push_back(a_FT_locn);
   }
   // determine sqrt-matrix
-  Eigen::SparseMatrix<double> a_FT_final(size,size);
-  a_FT_final.setZero();
-  a_FT_final += 0.5*c[0]*a_FT[0];
-  for (int n=1; n<nmax; n++) {
-    a_FT_final += c[n]*a_FT[n];
-    printf("sparse: %d\n",a_FT_final.nonZeros());
+  std::vector<Eigen::SparseMatrix<double> > a_FT_final;
+  for (int t = 0; t < Nt; t++) {
+    Eigen::SparseMatrix<double> a_FT_finalt = Eigen::SparseMatrix<double>(size,size);
+    a_FT_finalt.setZero();
+    a_FT_finalt += 0.5*c[t][0]*a_FT[0][t];
+    for (int n=1; n<nmaxmax; n++) {
+      a_FT_finalt += c[t][n]*a_FT[n][t];
+      //printf("sparse: %d\n",a_FT_final.nonZeros());
+    }
+    a_FT_final.push_back(a_FT_finalt);
   }
+  a_FT.clear();
   //printf("Sqrt-FT_a_final:\n");
-  //cout << a_FT_final << endl;
-  //cout << a_FT_final*a_FT_final << endl;
+  //for (int t = 0; t < N; t++) {
+    //cout << a_FT_final[0] << endl;
+  //}
+  //cout << a_FT_final[0]*a_FT_final[0].transpose() << endl;
   //cout << A_FT[0] << endl;
+  // test result
+  std::vector<Eigen::VectorXcd> a_FT_compare;
+  for (int t = 0; t < Nt; t++) {
+    Eigen::VectorXcd a_FT_comparet = Eigen::VectorXd(size);
+    for (int i=0; i<size;i++) {
+      a_FT_comparet(i).real(0.0);
+      a_FT_comparet(i).imag(0.0);
+      for (int j=0; j<size;j++) {
+	a_FT_comparet(i).real(a_FT_comparet(i).real()+a_FT_final[t].coeffRef(i,j)*bufout[j*N+t].r);
+	//a_FT_comparet(i).imag(a_FT_comparet(i).imag()+a_FT_final[t].coeffRef(i,j)*bufout[j*N+t].i);
+      }
+    }
+    a_FT_compare.push_back(a_FT_comparet);
+  }
+  //printf("TEST1:\n");
+  //for (int i=0; i<size;i++) printf("%f\n",bufout[i*N].r);
+  //cout << a_FT_compare[0] << endl;
+  a_FT_compare.clear();*/
   
-  // step 4b: (debugging) determine noise matrix k
+  // step 4: determine correlated noise vector alpha_final
+  t1 = MPI_Wtime();
+  // determine noise vector
+  std::vector<std::vector<VectorXcd> > frl;
+  // initialize alpha0
+  std::vector<VectorXcd> alpha0;
+  for (int t = 0; t < Nt; t++) {
+    VectorXcd alpha0t(size);
+    for (int i=0; i<size;i++) {
+      alpha0t(i).real(bufout[i*N+t].r);
+      // - due to cross-correlation theorem
+      alpha0t(i).imag(-bufout[i*N+t].i);
+    }
+    alpha0.push_back(alpha0t);
+  }
+  frl.push_back(alpha0);
+  // initialize alpha1
+  std::vector<VectorXcd> alpha1;
+  for (int t = 0; t < Nt; t++) {
+    //cout << A_FT[t] << endl;
+    //cout << frl[0][t] << endl;
+    //cout << ta[t] << endl;
+    VectorXcd alpha1t = ta[t]*A_FT[t]*frl[0][t]+tb[t]*frl[0][t];
+    alpha1.push_back(alpha1t);
+  }
+  frl.push_back(alpha1);
+  // loop
+  for (int n=2; n<nmaxmax; n++) {
+    std::vector<VectorXcd> alphan;
+    for (int t = 0; t < Nt; t++) {
+      VectorXcd alphant = 2*ta[t]*A_FT[t]*frl[n-1][t]+2*tb[t]*frl[n-1][t]-frl[n-2][t];
+      alphan.push_back(alphant);
+    }
+    frl.push_back(alphan);
+  }
+  std::vector<VectorXcd> frl_final;
+  for (int t = 0; t < Nt; t++) {
+    VectorXcd frl_finalt = 0.5*c[t][0]*frl[0][t];
+    for (int n=1; n<nmaxmax; n++) {
+      frl_finalt += c[t][n]*frl[n][t];
+    }
+    frl_final.push_back(frl_finalt);
+  }
+  frl.clear();
+  for (int t=0; t<Nt; t++) {
+    delete [] c[t];
+  }
+  delete [] ta;
+  delete [] tb;
+  delete [] nmax;
+  delete [] c;
+  /*printf("TEST2:\n");
+  cout << frl_final[0] << endl;*/
+  // transform back
+  memset(bufout,0,sizeof(kiss_fft_cpx)*size*N);
+  for (int t = 0; t < Nt; t++) {
+    for (int i=0; i<size;i++) {
+      bufout[i*N+t].r = frl_final[t](i).real();
+      bufout[i*N+t].i = frl_final[t](i).imag();
+      /*if (t==0 || t==Nt-1){ }
+	else {
+	  bufout[i*N+N-t].r = frl_final[t](i).real();
+      bufout[i*N+N-t].i = frl_final[t](i).imag();
+	}*/
+      
+    }
+  }
+  frl_final.clear();
+  //printf("FT result\n");
+  for (int t = 0; t < Nt; t++) {
+    for (int i=0; i<size;i++) {
+      //printf("%d %f\n",t,bufout[i*N+t].r*sqrt(update->dt));
+    }
+  }
   
+  kiss_fftr_cfg sti = kiss_fftr_alloc( N ,1 ,0,0);
+  for (int i=0; i<size;i++) {
+    kiss_fftri( sti ,&bufout[i*N],&buf[i*N] );
+  }
   
+  free(st); free(sti);
+  kiss_fft_cleanup();
+
+  //printf("FT result\n");
+  for (int i=0; i<nlocal;i++) {
+    fr[i][0]=buf[(3*i+0)*N]/N*sqrt(update->dt);
+    fr[i][1]=buf[(3*i+1)*N]/N*sqrt(update->dt);
+    fr[i][2]=buf[(3*i+2)*N]/N*sqrt(update->dt);
+  }
+  t2 = MPI_Wtime();
+  time_final_noise += t2-t1;
+  free(buf); free(bufout);
 }
 
 

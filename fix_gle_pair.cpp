@@ -46,7 +46,6 @@ Careful:
 #include "domain.h"
 #include "kiss_fft.h"
 #include "kiss_fftr.h"
-#include <unsupported/Eigen/MatrixFunctions>
 
 using namespace LAMMPS_NS;
 using namespace FixConst;
@@ -668,7 +667,7 @@ void FixGLEPair::update_cholesky()
 	if (dist < 0) {
 	  error->all(FLERR,"Particles closer than lower cutoff in fix/pair/jung\n");
 	} else if (dist < Nd) {
-	  double data = cross_data[Nt*dist+t];
+	  /*double data = cross_data[Nt*dist+t];
 	  for (int dim1=0; dim1<d;dim1++) {
 	    for (int dim2=0; dim2<d;dim2++) {
 	      if (data*dr[dim1]*dr[dim2]*rsqi != 0) {
@@ -676,7 +675,7 @@ void FixGLEPair::update_cholesky()
 		if (t==0) non_zero++;
 	      }
 	    }
-	  }
+	  }*/
 	}
       }
     }
@@ -776,8 +775,8 @@ void FixGLEPair::update_cholesky()
   
   // step 2: determine eigenvalue bounds of A_FT matrices
   t1 = MPI_Wtime();
-  int mLanczos = 10;
-  double tolLanczos = 0.000001;
+  int mLanczos = 50;
+  double tolLanczos = 0.00001;
 
   // main Lanczos loop, determine eigenvalue bounds
   // choose twice the size to include complex values
@@ -838,13 +837,33 @@ void FixGLEPair::update_cholesky()
 	  }
 	  //printf("Hk-Matrix\n");
 	  //cout << Hk << endl;
-	  MatrixXd f_Hk = Hk.sqrt();
+	  //Eigen::LLT<MatrixXd > Hk_comp(Hk);
+	  //MatrixXd f_Hk = Hk_comp.matrixL();
+	  // determine sqrt-matrix
+	  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> Hk_eigen(Hk);
+	  Eigen::MatrixXd Hk_eigenvector = Hk_eigen.eigenvectors().real();
+	  if (Hk_eigen.info()!=0) {
+	    cout << Hk_eigen.eigenvalues() << endl;
+	    printf("A not positive-definite!\n");
+	  }  
+	  // create square root matrix
+	  Eigen::MatrixXd Hk_diag = Eigen::MatrixXd::Zero(k,k);
+	  for (int i=0; i<k; i++) {
+	    Hk_diag(i,i) = sqrt(Hk_eigen.eigenvalues().real()(i));
+	  }
+	  MatrixXd f_Hk = Hk_eigenvector * Hk_diag * Hk_eigenvector.transpose();
 	  VectorXd e1 = VectorXd::Zero(k);
 	  e1(0) = 1.0;
 	  VectorXd f_Hk1 = f_Hk * e1;
 	  VectorXd xk = Vn*f_Hk1*norm; 
 	  if (k==2) FT_w.push_back(xk);
-	  else FT_w[2*t+s] = xk;
+	  else {
+	    VectorXd diff = (FT_w[2*t+s] - xk);
+	    double diff_norm = diff.norm();
+	    FT_w[2*t+s] = xk;
+	    if (diff_norm < tolLanczos) break;
+	    //printf("%d %f\n",k,diff_norm);
+	  }
 	  //printf("sol %d\n",k);
 	  //cout << xk << endl;
 	}

@@ -170,7 +170,8 @@ void FixCondiff::setup()
 
     delvolinv = delxinv * delyinv * delzinv;
     dt = update->dt;
-    wienerConst = sqrt(2 * D * dt);
+    //wienerConst = sqrt(2 * D * dt);
+    wienerConst = sqrt(6 * D * dt); // 6 due to uniform random numbers
 }
 
 //setup_grid() framework taken from pppm.cpp
@@ -217,6 +218,7 @@ void FixCondiff::assign_vf()
     double** f = atom->f;
     int nlocal = atom->nlocal;
     int* mask = atom->mask;
+        int* tag = atom->tag;
 
     for (int i = 0; i < nlocal; i++) {
 
@@ -290,6 +292,7 @@ void FixCondiff::reassign_vf()
     double** f = atom->f;
     int nlocal = atom->nlocal;
     int* mask = atom->mask;
+    int* tag = atom->tag;
 
     for (int i = 0; i < nlocal; i++) {
 
@@ -317,7 +320,8 @@ void FixCondiff::reassign_vf()
                     for (l = nlower; l <= nupper; l++) {
                         mx = l + nx;
                         x0 = y0 * rho1d[0][l];
-                        if (density_brick_counter_x[mz][my][mx] != 0) {
+			// cutoff to prohibit float errors in the normalization
+                        if (density_brick_counter_x[mz][my][mx]*density_brick_counter_x[mz][my][mx]>=0.0000000000000001) { 
                             v[i][0] += (density_brick_velocity_x[mz][my][mx] * x0 / density_brick_counter_x[mz][my][mx]);
                             v[i][1] += (density_brick_velocity_y[mz][my][mx] * x0 / density_brick_counter_x[mz][my][mx]);
                             v[i][2] += (density_brick_velocity_z[mz][my][mx] * x0 / density_brick_counter_x[mz][my][mx]);
@@ -366,6 +370,7 @@ void FixCondiff::euler_step()
     double** f = atom->f;
     int nlocal = atom->nlocal;
     int* mask = atom->mask;
+    int* tag = atom->tag;
 
     for (int i = 0; i < nlocal; i++) {
         if (mask[i] & groupbit_condiff) {
@@ -378,6 +383,7 @@ void FixCondiff::euler_step()
             x[i][0] += v[i][0] * dt + f[i][0] * dt * D / T + wienerConst * rand[0];
             x[i][1] += v[i][1] * dt + f[i][1] * dt * D / T + wienerConst * rand[1];
             x[i][2] += v[i][2] * dt + f[i][2] * dt * D / T + wienerConst * rand[2];
+	    
         }
     }
 }

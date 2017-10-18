@@ -31,47 +31,41 @@ namespace LAMMPS_NS {
 
 class FixCondiff : public Fix {
 
-  public:
-	FixCondiff(class LAMMPS *, int, char **);
-	~FixCondiff();
-	int setmask();
-	void post_force(int);
-	void final_integrate();
-	void kspace_check();
-    	void pppm_check();
-    	void apply_boundary_conditions();
+public:
+    FixCondiff(class LAMMPS*, int, char**);
+    ~FixCondiff();
+    int setmask();
+    void post_force(int);
+    void final_integrate();
+    void kspace_check();
+    void pppm_check();
 
-
-  protected:
+protected:
     void setup();
-    virtual void particle_map();
-    virtual void make_rho();
-    void reverse_make_rho();
+    virtual void assign_vf();
+    void reassign_vf();
     void euler_step();
     void deallocate();
     void allocate();
-    void compute_rho1d(const FFT_SCALAR &, const FFT_SCALAR &,
-            const FFT_SCALAR &);
+    void compute_rho1d(const FFT_SCALAR&, const FFT_SCALAR&,
+        const FFT_SCALAR&);
     void compute_rho_coeff();
-    void compute_drho1d(const FFT_SCALAR &, const FFT_SCALAR &, const
-            FFT_SCALAR &);
+    void compute_drho1d(const FFT_SCALAR&, const FFT_SCALAR&, const FFT_SCALAR&);
     void set_grid_local();
     void setup_grid();
 
-    FFT_SCALAR ***density_brick_velocity_x;
-    FFT_SCALAR ***density_brick_velocity_y;
-    FFT_SCALAR ***density_brick_velocity_z;
-    FFT_SCALAR ***density_brick_counter_x;
+    FFT_SCALAR*** density_brick_velocity_x;
+    FFT_SCALAR*** density_brick_velocity_y;
+    FFT_SCALAR*** density_brick_velocity_z;
+    FFT_SCALAR*** density_brick_counter_x;
 
-    FFT_SCALAR ***density_brick_force_x;
-    FFT_SCALAR ***density_brick_force_y;
-    FFT_SCALAR ***density_brick_force_z;
+    FFT_SCALAR*** density_brick_force_x;
+    FFT_SCALAR*** density_brick_force_y;
+    FFT_SCALAR*** density_brick_force_z;
 
-    double *rand;
+    double* rand;
 
-    FFT_SCALAR **rho1d,**rho_coeff,**drho1d,**drho_coeff; //compute_rho1d
-
-    class GridComm *cg;
+    FFT_SCALAR **rho1d, **rho_coeff, **drho1d, **drho_coeff;
 
     int order, minorder, order_allocated;
 
@@ -81,41 +75,33 @@ class FixCondiff : public Fix {
     double D;
     int seed;
 
-    int nx_pppm, ny_pppm, nz_pppm; //particle_map
-
-    double *boxlo;
+    double* boxlo;
     double shift;
 
     double dt;
 
     double wienerConst;
 
+    int me, nprocs;
 
-    int me,nprocs;
-
-    double delxinv,delyinv,delzinv,delvolinv; //setup
+    double delxinv, delyinv, delzinv, delvolinv; //setup
     double volume;
 
     double shiftone; //make_rho
     int nlower, nupper;
 
-    int nxlo_in,nylo_in,nzlo_in,nxhi_in,nyhi_in,nzhi_in;
-    int nxlo_out,nylo_out,nzlo_out,nxhi_out,nyhi_out,nzhi_out;
-    int nxlo_ghost,nxhi_ghost,nylo_ghost,nyhi_ghost,nzlo_ghost,nzhi_ghost;
-    int nxlo_fft,nylo_fft,nzlo_fft,nxhi_fft,nyhi_fft,nzhi_fft;
-    int ngrid,nfft,nfft_both;
+    int nx_pppm, ny_pppm, nz_pppm;
+    int nxlo_in, nylo_in, nzlo_in, nxhi_in, nyhi_in, nzhi_in;
+    int nxlo_out, nylo_out, nzlo_out, nxhi_out, nyhi_out, nzhi_out;
+    int ngrid;
 
-    class RanMars *random;
+    class RanMars* random;
 
     int nmax;
 
-    double time1;
-    double time2;
+    FILE* file;
 };
-
-
 }
-
 
 #endif
 #endif

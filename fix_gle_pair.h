@@ -21,11 +21,6 @@ FixStyle(gle/pair,FixGLEPair)
 #define LMP_FIX_GLE_PAIR_H
 
 #include "fix.h"
-#include <iostream>
-#include <stdlib.h> 
-#include <Eigen/Dense>
-#include <Eigen/Eigen>
-#include <vector>
 
 #define USE_CHEBYSHEV
 
@@ -45,32 +40,29 @@ class FixGLEPair : public Fix {
   void grow_arrays(int);
 
  protected:
-  double dtv,dtf, int_a,int_b;
+  int me;
   double t_target;
 
+  // read in
   FILE * input;
   char* keyword;
-  int memory_flag;
-  
   double dStart,dStep,dStop;
   int Nd;
   double tStart,tStep,tStop;
   int Nt;
-  int Niter;
-  int d,d2;
-  
   double *self_data;
   double *cross_data;
   double *self_data_ft;
   double *cross_data_ft;
   
+  // system constants and data
+  int d,d2;
+  double dtf, int_a,int_b;
   int isInitialized;
-  int Nupdate;
   double **ran;
   double **fd;
   double **fr;
   double **x_save;
-  double **x_save_update;
   int lastindexN,lastindexn;
   double **fc;
 
@@ -79,10 +71,8 @@ class FixGLEPair : public Fix {
   // neighbor list
   int irequest;
   NeighList *list;
- 
   
-  // Timing 
-  int me;
+  // timing 
   double t1,t2;
   double time_read;
   double time_init;
@@ -90,19 +80,13 @@ class FixGLEPair : public Fix {
   double time_noise;
   double time_matrix_create;
   double time_forwardft;
-  double time_eigenvalues;
-  double time_chebyshev;
-  double time_final_noise;
+  double time_sqrt;
+  double time_backwardft;
   double time_dist_update;
   double time_int_rel2;
   
   void read_input();
-  void update_cholesky();
-  
- private:
-  inline int sbmask(int j) {
-    return j >> SBBITS & 3;
-  }
+  void update_noise();
 };
 
 }

@@ -44,6 +44,9 @@ Careful:
 #include "error.h"
 #include "group.h"
 #include "domain.h"
+#include <iostream>
+#include <Eigen/Dense>
+#include <Eigen/Eigen>
 #include "kiss_fft.h"
 #include "kiss_fftr.h"
 
@@ -51,7 +54,6 @@ using namespace LAMMPS_NS;
 using namespace FixConst;
 using namespace std;
 using namespace Eigen;
-typedef ConjugateGradient<SparseMatrix<double>,Lower, IncompleteCholesky<double> > ICCG;
 typedef Eigen::Triplet<double> Td;
 typedef Eigen::Triplet<int> Ti;
 
@@ -77,8 +79,10 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
   int narg_min = 5;
   if (narg < narg_min) error->all(FLERR,"Illegal fix gle/pair/jung command");
 
+  // temperature
   t_target = force->numeric(FLERR,arg[3]);
   
+  // seed for random numbers
   int seed = force->inumeric(FLERR,arg[4]);
   
   // read input file
@@ -90,12 +94,12 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
   }
   keyword = arg[6];
   
-  // Error checking for the first set of required input arguments
+  // error checking for the first set of required input arguments
   if (seed <= 0) error->all(FLERR,"Illegal fix gle/pair/jung command");
   if (t_target < 0)
     error->all(FLERR,"Fix gle/pair/jung temperature must be >= 0");
   
-  // Set number of dimensions
+  // set number of dimensions
   d=3;
   d2=d*d;
   
@@ -106,9 +110,8 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
   time_noise = 0.0;
   time_matrix_create = 0.0;
   time_forwardft = 0.0;
-  time_eigenvalues = 0.0;
-  time_chebyshev = 0.0;
-  time_final_noise = 0.0;
+  time_sqrt = 0.0;
+  time_backwardft = 0.0;
   time_dist_update = 0.0;
   time_int_rel2 = 0.0;
   
@@ -121,32 +124,26 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
   // initialize Marsaglia RNG with processor-unique seed
   random = new RanMars(lmp,seed + comm->me);
   
+  // initialize
   t1 = MPI_Wtime();
-  memory->create(x_save, Nt, 3*atom->nlocal, "gle/pair/aux:x_save");
-  memory->create(x_save_update,atom->nlocal,3, "gle/pair/aux:x_save_update");
-  memory->create(fc, atom->nlocal, 3, "gle/pair/aux:fc");
-  
   int *type = atom->type;
   double *mass = atom->mass;
-  dtv = update->dt;
   dtf = 0.5 * update->dt * force->ftm2v;
   int_b = 1.0/(1.0+self_data[0]*update->dt/4.0/mass[type[0]]); // 4.0 because K_0 = 0.5*K(0)
   int_a = (1.0-self_data[0]*update->dt/4.0/mass[type[0]])*int_b; // 4.0 because K_0 = 0.5*K(0)
-  printf("integration: int_a %f, int_b %f mem %f\n",int_a,int_b,self_data[0]);
   lastindexN = 0,lastindexn=0;
-  Nupdate = 0;
   
-    
+  // allocate memory
   int nlocal = atom->nlocal;
   double **x = atom->x;
   double **f = atom->f;
   int k,i,j,n,t;
-  
-  // allocate memory
   int N = 2*Nt-2;
+  memory->create(x_save, Nt, 3*atom->nlocal, "gle/pair/aux:x_save");
   memory->create(ran, N, atom->nlocal*d, "gle/pair/jung:ran");
   memory->create(fd, atom->nlocal,3, "gle/pair/jung:fd");
-  memory->create(fr, atom->nlocal*d,3, "gle/pair/jung:fr");
+  memory->create(fc, atom->nlocal,3, "gle/pair/jung:fc");
+  memory->create(fr, atom->nlocal,3, "gle/pair/jung:fr");
   size_vector = atom->nlocal;
   
   // initialize forces
@@ -158,6 +155,7 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
     }
   }
   
+  // initiliaze position storage
   imageint *image = atom->image;
   tagint *tag = atom->tag;
   double unwrap[3];
@@ -166,11 +164,11 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
       domain->unmap(x[i],image[i],unwrap);
       for (int dim1=0; dim1<d; dim1++) { 
 	x_save[t][3*i+dim1] = unwrap[dim1];
-	x_save_update[i][dim1] = x[i][dim1];
       }
     }
   }
   
+  // initilize (uncorrelated) random numbers
   for (int t = 0; t < N; t++) {
     for (int i = 0; i < nlocal; i++) {
       for (int dim1=0; dim1<d; dim1++) { 
@@ -178,11 +176,11 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
       }
     }
   }
-  
   t2 = MPI_Wtime();
   time_init += t2 -t1;
 
 }
+
 
 /* ----------------------------------------------------------------------
    Destroys memory allocated by the method
@@ -193,9 +191,7 @@ FixGLEPair::~FixGLEPair()
 
   delete random;
   memory->destroy(ran);
-
   memory->destroy(x_save);
-  memory->destroy(x_save_update);
   
   memory->destroy(fc);
   memory->destroy(fd);
@@ -203,8 +199,11 @@ FixGLEPair::~FixGLEPair()
   
   delete [] cross_data;
   delete [] self_data;
+  delete [] cross_data_ft;
+  delete [] self_data_ft;
 
 }
+
 
 /* ----------------------------------------------------------------------
    Specifies when the fix is called during the timestep
@@ -212,11 +211,14 @@ FixGLEPair::~FixGLEPair()
 
 int FixGLEPair::setmask()
 {
+  
   int mask = 0;
   mask |= INITIAL_INTEGRATE;
   mask |= FINAL_INTEGRATE;
   return mask;
+  
 }
+
 
 /* ----------------------------------------------------------------------
    Initialize the method parameters before a run
@@ -224,6 +226,7 @@ int FixGLEPair::setmask()
 
 void FixGLEPair::init()
 {
+  
   // need a full neighbor list, built whenever re-neighboring occurs
   irequest = neighbor->request(this);
   neighbor->requests[irequest]->pair = 0;
@@ -248,6 +251,7 @@ void FixGLEPair::init()
   isInitialized = 0;
   
   // FFT memory kernel for later processing
+  int i,t,l;
   int N = 2*Nt -2;
   self_data_ft = new double[Nt];
   cross_data_ft = new double[Nt*Nd];
@@ -256,40 +260,42 @@ void FixGLEPair::init()
   buf=(kiss_fft_scalar*)KISS_FFT_MALLOC(sizeof(kiss_fft_scalar)*N*(1+Nd));
   bufout=(kiss_fft_cpx*)KISS_FFT_MALLOC(sizeof(kiss_fft_cpx)*N*(1+Nd));
   memset(bufout,0,sizeof(kiss_fft_cpx)*N*(1+Nd));
-  for (int t=0; t<Nt; t++) {
+  for (t=0; t<Nt; t++) {
     buf[t] = self_data[t];
     if (t==0 || t==Nt-1){ }
     else {
       buf[N-t] = self_data[t];
     }
   }
-  for (int d=0; d< Nd; d++) {
-    for (int t=0; t<Nt; t++) {
-      buf[N*(d+1)+t] = cross_data[Nt*d+t];
+  for (l=0; l< Nd; l++) {
+    for (t=0; t<Nt; t++) {
+      buf[N*(l+1)+t] = cross_data[Nt*l+t];
       if (t==0 || t==Nt-1){ }
       else {
-	buf[N*(d+1)+N-t] = cross_data[Nt*d+t];
+	buf[N*(l+1)+N-t] = cross_data[Nt*l+t];
       }
     }
   }
   
   kiss_fftr_cfg st = kiss_fftr_alloc( N ,0 ,0,0);
-  for (int i=0; i<1+Nd;i++) {
+  for (i=0; i<1+Nd;i++) {
     kiss_fftr( st ,&buf[i*N],&bufout[i*N] );
   }
   
-  
-  for (int t=0; t<Nt; t++) {
+  for (t=0; t<Nt; t++) {
     self_data_ft[t] = bufout[t].r;
-    //printf("%f\n",self_data_ft[t]);
   }
-  for (int d=0; d< Nd; d++) {
-    for (int t=0; t<Nt; t++) {
-      cross_data_ft[Nt*d+t] = bufout[N*(d+1)+t].r;
+  for (l=0; l< Nd; l++) {
+    for (t=0; t<Nt; t++) {
+      cross_data_ft[Nt*l+t] = bufout[N*(l+1)+t].r;
     }
   }
   free(st);
+  free(buf);
+  free(bufout);
+  
 }
+
 
 /* ----------------------------------------------------------------------
    First half of a timestep (V^{n} -> V^{n+1/2}; X^{n} -> X^{n+1})
@@ -297,17 +303,10 @@ void FixGLEPair::init()
 
 void FixGLEPair::initial_integrate(int vflag)
 {
-  double dtfm;
-  double ftm2v = force->ftm2v;
-
-  double meff;
-  double theta_qss, theta_qsc, theta_qcs, theta_qcc11, theta_qcc12;
-  double theta_qsps, theta_qspc;
-  int ind_coef, ind_q=0;
-  int s,c,m;
-  int indi,indd,indj;
-
-  // update v and x of atoms in group
+  
+  double dtfm, meff;
+  int i,dim1,t;
+  int n,m;
   double **x = atom->x;
   double **v = atom->v;
   double **f = atom->f;
@@ -316,72 +315,111 @@ void FixGLEPair::initial_integrate(int vflag)
   int *mask = atom->mask;
   int nlocal = atom->nlocal;
   tagint *tag = atom->tag;
-  if (igroup == atom->firstgroup) nlocal = atom->nfirst;
   
-  
-  // update noise
-  for (int i = 0; i < nlocal; i++) {
-    for (int dim1=0; dim1<d; dim1++) { 
+  // update (uncorrelated) noise
+  for (i = 0; i < nlocal; i++) {
+    for (dim1=0; dim1<d; dim1++) { 
       ran[lastindexN][d*i+dim1] = random->gaussian();
       fr[i][dim1] = 0.0;
       fd[i][dim1] = 0.0;
     }
   }
+  
+  // Initilize noise in the first step (needs neighbor list update)
   t1 = MPI_Wtime();
-  // initilize in the first step
   if (!isInitialized) {
     list = neighbor->lists[irequest];
-    update_cholesky();
+    update_noise();
     isInitialized = 1;
   }
   t2 = MPI_Wtime();
   time_noise += t2 -t1;
   
-  // determine random contribution
-  int n = lastindexN;
-  int N = 2*Nt -2;
-  double sqrt_dt=sqrt(update->dt);
-  /*for (int t = 0; t < N; t++) {
-    for (int k=0; k<a[t].outerSize(); ++k) {
-      int dim = k%d;
-      int i = (k-dim)/d;
-      for (SparseMatrix<double>::InnerIterator it(a[t],k); it; ++it) {
-	fr[i][dim] += it.value()*ran[n][it.row()]*sqrt_dt;
-      }   
-    }
-    n--;
-    if (n==-1) n=2*Nt-3;
-  }*/
+  // Determine dissipative force contribution
+  t1 = MPI_Wtime();
+  int j,dim2,ii,jj,inum,jnum,itype,jtype,itag,jtag;
+  double xtmp,ytmp,ztmp,rsq,rsqi;
+  int *ilist,*jlist,*numneigh,**firstneigh;
+  neighbor->build_one(list);
+  inum = list->inum;
+  ilist = list->ilist;
+  numneigh = list->numneigh;
+  firstneigh = list->firstneigh;
+  double *dr = new double[3];
+  double proj;
+  int dist;
   
-  // determine dissipative contribution
-    t1 = MPI_Wtime();
-  /*n = lastindexn;
-  m = lastindexn-1;
-  if (m==-1) m=Nt-1;
-  for (int t = 1; t < Nt; t++) {
-    for (int k=0; k<A[t].outerSize(); ++k) {
-      int dim = k%d;
-      int i = (k-dim)/d;
-      for (SparseMatrix<double>::InnerIterator it(A[t],k); it; ++it) {
-	int dimj = it.row()%d;
-	int j = (it.row()-dimj)/d;
-	fd[i][dim] += it.value()* (x_save[n][3*j+dimj]-x_save[m][3*j+dimj]);
-      }   
+  for (ii = 0; ii < inum; ii++) {
+    i = ilist[ii];
+    
+    xtmp = x[i][0];
+    ytmp = x[i][1];
+    ztmp = x[i][2];
+    itype = type[i];
+    itag = tag[i]-1;
+    jlist = firstneigh[i];
+    jnum = numneigh[i];
+      
+    // self-correlation contribution
+    for (dim1=0; dim1<d;dim1++) {
+      n = lastindexn;
+      m = lastindexn-1;
+      if (m==-1) m=Nt-1;
+      for (t = 1; t < Nt; t++) {
+	fd[i][dim1] += self_data[t]*(x_save[n][3*i+dim1]-x_save[m][3*i+dim1]);
+	n--;
+	m--;
+	if (n==-1) n=Nt-1;
+	if (m==-1) m=Nt-1;
+      }
     }
-    n--;
-    m--;
-    if (n==-1) n=Nt-1;
-    if (m==-1) m=Nt-1;
-  }*/
-  t2 = MPI_Wtime();
-  time_int_rel1 += t2 -t1;
+      
+    // cross-correlation contribution
+    for (jj = 0; jj < jnum; jj++) {
+      j = jlist[jj];
+      j &= NEIGHMASK;
+      jtype = type[j];
+      jtag = tag[j]-1;
+	
+      dr[0] = xtmp - x[j][0];
+      dr[1] = ytmp - x[j][1];
+      dr[2] = ztmp - x[j][2];
+
+      rsq = dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2];
+      rsqi = 1/rsq;
+      dist = (sqrt(rsq) - dStart)/dStep;
+	    
+      if (dist < 0) {
+	error->all(FLERR,"Particles closer than lower cutoff in fix/pair/jung\n");
+      } else if (dist < Nd) {
+	for (dim1=0; dim1<d;dim1++) {
+	  for (dim2=0; dim2<d;dim2++) {
+	    proj = dr[dim1]*dr[dim2]*rsqi;
+	    if (proj != 0.0) {
+	      n = lastindexn;
+	      m = lastindexn-1;
+	      if (m==-1) m=Nt-1;
+	      for (t = 1; t < Nt; t++) {
+		fd[i][dim1] += proj*cross_data[dist*Nt+t]*(x_save[n][3*jtag+dim2]-x_save[m][3*jtag+dim2]);
+		n--;
+		m--;
+		if (n==-1) n=Nt-1;
+		if (m==-1) m=Nt-1;
+	      }
+	    }
+	  }
+	}
+      }
+    }
+  }
+  delete [] dr;
   
   // Advance X by dt
-  for (int i = 0; i < nlocal; i++) {
+  for (i = 0; i < nlocal; i++) {
     if (mask[i] & groupbit) {
       meff = mass[type[i]];   
       //printf("x: %f f: %f fd: %f fr: %f\n",x[i][0],f_step[i][0],fd[i],fr[i]);
-      for (int dim1=0; dim1<d; dim1++) { 
+      for (dim1=0; dim1<d; dim1++) { 
 	/*x[i][dim1] += int_b * update->dt * v[i][dim1] 
 	  + int_b * update->dt * update->dt / 2.0 / meff * fc[i][dim1] 
 	  - int_b * update->dt / meff/ 2.0 * fd[i][dim1]
@@ -389,51 +427,31 @@ void FixGLEPair::initial_integrate(int vflag)
       }
     }
   }
+  t2 = MPI_Wtime();
+  time_int_rel1 += t2 -t1;
   
+  // Update noise vector
+  t1 = MPI_Wtime();
+  update_noise();
+  t2 = MPI_Wtime();
+  time_noise += t2 -t1;
+  
+  // Update time/positions
+  t1 = MPI_Wtime();
   lastindexN++;
   if (lastindexN == 2*Nt-2) lastindexN = 0;
   lastindexn++;
   if (lastindexn == Nt) lastindexn = 0;
-  t1 = MPI_Wtime();
-  // Check whether Cholesky Update is necessary
-  double dr_max = 0.0;
-  double dx,dy,dz,rsq;
-  for (int i = 0; i < nlocal; i++) {
-    dx = x_save_update[i][0] - x[i][0];
-    dy = x_save_update[i][1] - x[i][1];
-    dz = x_save_update[i][2] - x[i][2];
-    rsq = dx*dx+dy*dy+dz*dz;
-    if (rsq > dr_max) dr_max = rsq;
-  }
-  //printf("dr_max %f\n",dr_max);
-  //if (dr_max > dStep*dStep/4.0) 
-  {
-    Nupdate++;
-    for (int i = 0; i < nlocal; i++) {
-      x_save_update[i][0] = x[i][0];
-      x_save_update[i][1] = x[i][1];
-      x_save_update[i][2] = x[i][2];
-    }
-    update_cholesky();
-  }
-  t2 = MPI_Wtime();
-  time_noise += t2 -t1;
-  
-  t1 = MPI_Wtime();
-  
-  // Update positions
   imageint *image = atom->image;
   double unwrap[3];
-  for (int i = 0; i < nlocal; i++) {
+  for (i = 0; i < nlocal; i++) {
     domain->unmap(x[i],image[i],unwrap);
     x_save[lastindexn][3*i] = unwrap[0];
     x_save[lastindexn][3*i+1] = unwrap[1];
     x_save[lastindexn][3*i+2] = unwrap[2];
   }
-  
   t2 = MPI_Wtime();
   time_dist_update += t2 -t1;
-  
   
 }
 
@@ -444,15 +462,8 @@ void FixGLEPair::initial_integrate(int vflag)
 void FixGLEPair::final_integrate()
 {
 
-  double dtfm;
-  double ftm2v = force->ftm2v;
-
-  double meff;
-  double theta_vs, alpha_vs, theta_vc, alpha_vc;
-  int ind_coef, ind_q;
-
-  t1 = MPI_Wtime();
-  // update v and x of atoms in group
+  double dtfm,meff;
+  int i,dim1;
   double **x = atom->x;
   double **v = atom->v;
   double **f = atom->f;
@@ -460,15 +471,14 @@ void FixGLEPair::final_integrate()
   int *type = atom->type;
   int *mask = atom->mask;
   int nlocal = atom->nlocal;
-  if (igroup == atom->firstgroup) nlocal = atom->nfirst;
 
   // Advance V by dt
-  for (int i = 0; i < nlocal; i++) {
+  t1 = MPI_Wtime();
+  for (i = 0; i < nlocal; i++) {
     if (mask[i] & groupbit) {
-      // Calculate integration constants
       meff = mass[type[i]];   
       dtfm = dtf / meff;
-      for (int dim1=0; dim1<d; dim1++) { 
+      for (dim1=0; dim1<d; dim1++) { 
 	v[i][dim1] = int_a * v[i][dim1] 
 	  + update->dt/2.0/meff * (int_a*fc[i][dim1] + f[i][dim1]) 
 	  - int_b * fd[i][dim1]/meff 
@@ -478,51 +488,46 @@ void FixGLEPair::final_integrate()
   }
   
   // save conservative force for integration
-  for ( int i=0; i< nlocal; i++) {
+  for ( i=0; i< nlocal; i++) {
     fc[i][0] = f[i][0];
     fc[i][1] = f[i][1];
     fc[i][2] = f[i][2];
   }
 
   // force equals .... (not yet implemented)
-  for ( int i=0; i< nlocal; i++) {
+  for ( i=0; i< nlocal; i++) {
     f[i][0] = fr[i][0];
     f[i][1] = fr[i][1];
     f[i][2] = fr[i][2];
   }
-
   t2 = MPI_Wtime();
   time_int_rel2 += t2 -t1;
   
-      // print timing
-  if (update->nsteps == update->ntimestep || update->ntimestep % 10000 == 0) {
-    printf("Update %d times\n",Nupdate);
+  // print timing in the last timestep
+  if (update->nsteps == update->ntimestep) {
     printf("processor %d: time(read) = %f\n",me,time_read);
     printf("processor %d: time(init) = %f\n",me,time_init);
     printf("processor %d: time(int_rel1) = %f\n",me,time_int_rel1);
     printf("processor %d: time(noise) = %f\n",me,time_noise);
     printf("processor %d: time(matrix_create) = %f\n",me,time_matrix_create);
     printf("processor %d: time(forwardft) = %f\n",me,time_forwardft);
-    printf("processor %d: time(eigenvalues) = %f\n",me,time_eigenvalues);
-    printf("processor %d: time(chebyshev) = %f\n",me,time_chebyshev);
-    printf("processor %d: time(final_noise) = %f\n",me,time_final_noise);
+    printf("processor %d: time(eigenvalues) = %f\n",me,time_sqrt);
+    printf("processor %d: time(backwardft) = %f\n",me,time_backwardft);
     printf("processor %d: time(int_rel2) = %f\n",me,time_int_rel2);
   }
-  
 
 }
 
+
 /* ----------------------------------------------------------------------
-   memory usage of local atom-based arrays
+   print random force contribution
 ------------------------------------------------------------------------- */
 
 double FixGLEPair::compute_vector(int n)
 {
-  tagint *tag = atom->tag;
-  
-  //printf("%d %d\n",t,i);
   
   return fr[n][0];
+  
 }
 
 
@@ -532,9 +537,10 @@ double FixGLEPair::compute_vector(int n)
 
 double FixGLEPair::memory_usage()
 {
-  double bytes = atom->nlocal*atom->nlocal*Nt*Nt*sizeof(double);
+  double bytes = atom->nlocal*atom->nlocal*d2*sizeof(double);
   return bytes;
 }
+
 
 /* ----------------------------------------------------------------------
    allocate local atom-based arrays
@@ -544,6 +550,7 @@ void FixGLEPair::grow_arrays(int nmax)
 {
   
 }
+
 
 /* ----------------------------------------------------------------------
    read input coefficients
@@ -567,10 +574,12 @@ void FixGLEPair::read_input()
   char *word = strtok(line," \t\n\r\f");
   
   // default values
-  Niter = 500;
   tStart= 0.0;
   tStep = 0.05;
   tStop = 5.0;
+  dStart= 6.0;
+  dStep = 0.05;
+  dStop = 19.95;
   
   while (word) {
     if (strcmp(word,"dStart") == 0) {
@@ -597,12 +606,7 @@ void FixGLEPair::read_input()
       word = strtok(NULL," \t\n\r\f");
       tStop = atof(word);
       printf("tStop %f\n",tStop);
-    } else if (strcmp(word,"Niter") == 0) {
-      word = strtok(NULL," \t\n\r\f");
-      Niter = atoi(word);
-      printf("Niter %d\n",Niter);
     } else {
-      printf("WORD: %s\n",word);
       error->one(FLERR,"Invalid keyword in pair table parameters");
     }
     word = strtok(NULL," \t\n\r\f");
@@ -615,10 +619,9 @@ void FixGLEPair::read_input()
   if (tStop < tStart)
     error->all(FLERR,"Fix gle/pair/aux tStop must be > tStart");
   Nt = (tStop - tStart) / tStep + 1.5;
-  
     
   // initilize simulations for either TIME input (fitting necessary) or FIT input (only reading necessary)
-  int d,t,i,n;
+  int l,t,i;
   double dummy_d, dummy_t,mem;
   
   self_data = new double[Nt];
@@ -630,15 +633,13 @@ void FixGLEPair::read_input()
     fscanf(input,"%lf %lf %lf\n",&dummy_d, &dummy_t, &mem);
     self_data[t] = mem*update->dt;
     time[t] = dummy_t;
-    //printf("%f\n",mem);
   }
   
   // read cross_memory
-  for (int d=0; d< Nd; d++) {
+  for (l=0; l< Nd; l++) {
     for (t=0; t<Nt; t++) {
       fscanf(input,"%lf %lf %lf\n",&dummy_d, &dummy_t, &mem);
-      cross_data[Nt*d+t] = mem*update->dt;
-      //printf("%f %f %f\n",dummy_d,dummy_t,mem);
+      cross_data[Nt*l+t] = mem*update->dt;
     }
   }
   delete [] time;
@@ -646,49 +647,53 @@ void FixGLEPair::read_input()
   
 }
 
+
 /* ----------------------------------------------------------------------
-   updates the interaction amplitudes by cholesky decomposition
+   Updates the correlated noise using the Lanczos method
 ------------------------------------------------------------------------- */
-void FixGLEPair::update_cholesky() 
+
+void FixGLEPair::update_noise() 
 {
   // initialize input matrix
-  int dist,t;
+  int dist,t, counter;
+  int k,s;
   int *type = atom->type;
   int nlocal = atom->nlocal;
   int *tag = atom->tag;
   double **x = atom->x;
-  int i,j,ii,jj,inum,jnum,itype,jtype,itag,jtag;
+  int N = 2*Nt-2;
+  int size = d*nlocal;
+  int i,dim1,j,dim2,ii,jj,inum,jnum,itype,jtype,itag,jtag;
   double xtmp,ytmp,ztmp,rsq,rsqi;
   double *dr = new double[3];
+  double proj;
   int *ilist,*jlist,*numneigh,**firstneigh;
   neighbor->build_one(list);
   inum = list->inum;
   ilist = list->ilist;
   numneigh = list->numneigh;
   firstneigh = list->firstneigh;
-  int non_zero=0;
+  
+  // step 1: create matrix A_FT (for t=0)
   double t1 = MPI_Wtime();
   std::vector<Td> tripletListd;
   std::vector<Ti> tripletListi;
   Eigen::SparseMatrix<double > A_FT(d*nlocal,d*nlocal);
   Eigen::SparseMatrix<int > A_dist(d*nlocal,d*nlocal);
 
-  // step 1: create matrix A_FT (for t=0)
-  int counter = 0;
-  int N = 2*Nt-2;
-  int size = d*nlocal;
-  for (int ii = 0; ii < inum; ii++) {
+  for (ii = 0; ii < inum; ii++) {
     i = ilist[ii];
     xtmp = x[i][0];
     ytmp = x[i][1];
     ztmp = x[i][2];
     itype = type[i];
     itag = tag[i]-1;
+
     jlist = firstneigh[i];
     jnum = numneigh[i];
       
     // set self-correlation
-    for (int dim1=0; dim1<d;dim1++) {
+    for (dim1=0; dim1<d;dim1++) {
       tripletListd.push_back(Td(itag*d+dim1,itag*d+dim1,self_data_ft[0]));
       tripletListi.push_back(Ti(itag*d+dim1,itag*d+dim1,-1));
     }
@@ -711,11 +716,13 @@ void FixGLEPair::update_cholesky()
       if (dist < 0) {
 	error->all(FLERR,"Particles closer than lower cutoff in fix/pair/jung\n");
       } else if (dist < Nd) {
-	for (int dim1=0; dim1<d;dim1++) {
-	  for (int dim2=0; dim2<d;dim2++) {
-	    double proj = dr[dim1]*dr[dim2]*rsqi;
-	    tripletListd.push_back(Td(itag*d+dim1,jtag*d+dim2,cross_data_ft[dist*Nt]*proj));
-	    tripletListi.push_back(Ti(itag*d+dim1,jtag*d+dim2,dist));
+	for (dim1=0; dim1<d;dim1++) {
+	  for (dim2=0; dim2<d;dim2++) {
+	    proj = dr[dim1]*dr[dim2]*rsqi;
+	    if (proj != 0.0) {
+	      tripletListd.push_back(Td(itag*d+dim1,jtag*d+dim2,cross_data_ft[dist*Nt]*proj));
+	      tripletListi.push_back(Ti(itag*d+dim1,jtag*d+dim2,dist));
+	    }
 	  }
 	}
       }
@@ -734,60 +741,52 @@ void FixGLEPair::update_cholesky()
   buf=(kiss_fft_scalar*)KISS_FFT_MALLOC(sizeof(kiss_fft_scalar)*size*N);
   bufout=(kiss_fft_cpx*)KISS_FFT_MALLOC(sizeof(kiss_fft_cpx)*size*N);
   memset(bufout,0,sizeof(kiss_fft_cpx)*size*N);
-  int nt0 = lastindexN;
-  for (int t = 0; t < N; t++) {
-    int ind = Nt-1+t;
+  int n = lastindexN,ind;
+  for (t = 0; t < N; t++) {
+    ind = Nt-1+t;
     if (ind >= N) ind -= N;
-    for (int i=0; i<size;i++) {
-      buf[i*N+ind]=ran[nt0][i];
+    for (i=0; i<size;i++) {
+      buf[i*N+ind]=ran[n][i];
     }
-    nt0--;
-    if (nt0==-1) nt0=2*Nt-3;
+    n--;
+    if (n==-1) n=2*Nt-3;
   }  
   // FFT evaluation
   kiss_fftr_cfg st = kiss_fftr_alloc( N ,0 ,0,0);
-  for (int i=0; i<size;i++) {
+  for (i=0; i<size;i++) {
     kiss_fftr( st ,&buf[i*N],&bufout[i*N] );
   }
-  
   t2 = MPI_Wtime();
   time_forwardft += t2-t1;
-  //printf("-------------------------------\n");
   
   // step 3: use lanczos method to compute sqrt-Matrix
   t1 = MPI_Wtime();
   int mLanczos = 50;
   double tolLanczos = 0.00001;
 
-  // main Lanczos loop, determine eigenvalue bounds
-  // choose twice the size to include complex values
+  // main Lanczos loop, determine krylov subspace
+  // s-loop switches between real and imaginary contribution
   std::vector<VectorXd> FT_w;
   
-  for (int t=0; t<Nt; t++) {
-    double t1 = MPI_Wtime();
+  for (t=0; t<Nt; t++) {
+    // update correlation matrix
     if (t>0) {
-      int counter = 0;
-      for (int k=0; k<A_FT.outerSize(); ++k) {
+      counter = 0;
+      for (k=0; k<A_FT.outerSize(); ++k) {
 	for (SparseMatrix<double>::InnerIterator it(A_FT,k); it; ++it) {
-	  int dist = A_dist.valuePtr()[counter];
-	  //printf("%d\n",dist);
+	  dist = A_dist.valuePtr()[counter];
 	  if (dist == -1) {
 	    it.valueRef() *= self_data_ft[t]/self_data_ft[t-1];
-	    //printf("%f\n",it.valueRef());
 	  }
 	  else it.valueRef() *= cross_data_ft[dist*Nt+t]/cross_data_ft[dist*Nt+t-1];
 	  counter++;
 	}
       }
     }
-    double t2 = MPI_Wtime();
-    time_chebyshev += t2-t1;
-    //cout << A_FT << endl;
-    for (int s = 0; s<2; s++) { 
+
+    for (s = 0; s<2; s++) { 
       Eigen::MatrixXd Vn;
-      //printf("test0\n");
       Vn.resize(size,1);
-      //printf("test1\n");
       VectorXd rk = VectorXd::Zero(size);
       double *alpha = new double[mLanczos+1];
       double *beta = new double[mLanczos+1];
@@ -795,39 +794,37 @@ void FixGLEPair::update_cholesky()
 	alpha[k] = 0.0;
 	beta[k] = 0.0;
       }
-      // generate random vector v and normalize
-      double norm = 0.0, random=0.0;
+      // input vector is the FFT of the (uncorrelated) noise vector
+      double norm = 0.0;
       Vn.col(0) = VectorXd::Zero(size);
       srand (time(NULL));
-      for (int i=0; i< size; i++) {
+      for (i=0; i< size; i++) {
 	if (s==0) Vn(i,0) = bufout[i*N+t].r;
 	else Vn(i,0) = bufout[i*N+t].i;
       }
       norm = Vn.col(0).norm();
       Vn.col(0) = Vn.col(0).normalized();
+      double t1 = MPI_Wtime();
       rk = A_FT * Vn.col(0);
+      double t2 = MPI_Wtime();
       alpha[1] = (Vn.col(0).adjoint()*rk).value();
-      //printf("\n");
+
+      // main laczos loop
       for (int k=2; k<=mLanczos; k++) {
 	rk = rk - alpha[k-1]*Vn.col(k-2);
 	if (k>2) rk -= beta[k-2]*Vn.col(k-3);
 	beta[k-1] = rk.norm();
 	// set new v
-	//printf("test2\n");
 	Vn.conservativeResize(size,k);
-	//cout << Vn.col(0) << endl;
-	//printf("test3\n");
 	Vn.col(k-1) = rk.normalized();
-      
 	rk = A_FT * Vn.col(k-1);
 	alpha[k] = (Vn.col(k-1).adjoint()*rk).value();
 
-	//printf("Lanczos Step %d: alpha %f, beta %f evMin %f, evMax %f\n",k,alpha[k-1],beta[k],evMin,evMax);
 	if (k>=2) {
-	  //generate eigenvalues/eigenvectors and check whether they fullfill the tolerance
+	  //generate result vector by contructing Hessenberg-Matrix
 	  Eigen::MatrixXd Hk = Eigen::MatrixXd::Zero(k,k);
-	  for (int i=0; i<k; i++) {
-	    for (int j=0; j<k; j++) {
+	  for (i=0; i<k; i++) {
+	    for (j=0; j<k; j++) {
 	      if (i==j) Hk(i,j) = alpha[i+1];
 	      if (i==j+1||i==j-1) {
 		int kprime = j;
@@ -836,23 +833,21 @@ void FixGLEPair::update_cholesky()
 	      }
 	    }
 	  }
-	  //printf("Hk-Matrix\n");
-	  //cout << Hk << endl;
-	  //Eigen::LLT<MatrixXd > Hk_comp(Hk);
-	  //MatrixXd f_Hk = Hk_comp.matrixL();
-	  // determine sqrt-matrix
+
+	  // determine sqrt-matrix (only on the small Hessenberg-Matrix)
 	  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> Hk_eigen(Hk);
 	  Eigen::MatrixXd Hk_eigenvector = Hk_eigen.eigenvectors().real();
 	  if (Hk_eigen.info()!=0) {
 	    cout << Hk_eigen.eigenvalues() << endl;
 	    printf("A not positive-definite!\n");
 	  }  
-	  // create square root matrix
 	  Eigen::MatrixXd Hk_diag = Eigen::MatrixXd::Zero(k,k);
 	  for (int i=0; i<k; i++) {
 	    Hk_diag(i,i) = sqrt(Hk_eigen.eigenvalues().real()(i));
 	  }
 	  MatrixXd f_Hk = Hk_eigenvector * Hk_diag * Hk_eigenvector.transpose();
+	  
+	  // determine result vector
 	  VectorXd e1 = VectorXd::Zero(k);
 	  e1(0) = 1.0;
 	  VectorXd f_Hk1 = f_Hk * e1;
@@ -862,39 +857,23 @@ void FixGLEPair::update_cholesky()
 	    VectorXd diff = (FT_w[2*t+s] - xk);
 	    double diff_norm = diff.norm();
 	    FT_w[2*t+s] = xk;
+	    // check for convergence
 	    if (diff_norm < tolLanczos) {
-	      printf("%d\n",k);
+	      //printf("%d\n",k);
 	      break;
 	    }
-	    //printf("%d %f\n",k,diff_norm);
 	  }
-	  //printf("sol %d\n",k);
-	  //cout << xk << endl;
 	}
       }
-      //cout << A_FT[t] << endl;
-      //printf("Lanczos EV-bounds %d: evMin = %f, evMax = %f\n",k,evMin[t],evMax[t]);
       delete [] alpha;
       delete [] beta;
-    
-      // compare results
-      //Eigen::LLT<MatrixXd > A_chol(MatrixXd(A_FT[t]));
-      //MatrixXd f_A = MatrixXd(A_FT[t]).sqrt();
-      //cout << f_A << endl;
-      //cout << Vn.col(0) << endl;
-      //VectorXd xn = f_A * Vn.col(0);
-      //printf("sol exact\n");
-      //cout << xn << endl;
     }
   }
-
-  //printf("done approx\n");
-  
   t2 = MPI_Wtime();
-  time_eigenvalues += t2-t1;
+  time_sqrt += t2-t1;
   
-    t1 = MPI_Wtime();
-  // transform back
+  // transform result vector back to time space
+  t1 = MPI_Wtime();
   memset(bufout,0,sizeof(kiss_fft_cpx)*size*N);
   for (int t = 0; t < Nt; t++) {
     for (int i=0; i<size;i++) {
@@ -911,18 +890,14 @@ void FixGLEPair::update_cholesky()
   free(st); free(sti);
   kiss_fft_cleanup();
 
-  //printf("FT result\n");
   for (int i=0; i<nlocal;i++) {
     fr[i][0]=buf[(3*i+0)*N]/N*sqrt(update->dt);
     fr[i][1]=buf[(3*i+1)*N]/N*sqrt(update->dt);
     fr[i][2]=buf[(3*i+2)*N]/N*sqrt(update->dt);
-    //printf("lanc %f %f %f\n",fr[i][0],fr[i][1],fr[i][2]);
   }
   t2 = MPI_Wtime();
-  time_final_noise += t2-t1;
+  time_backwardft += t2-t1;
   free(buf); free(bufout);
   
- 
 }
-
 

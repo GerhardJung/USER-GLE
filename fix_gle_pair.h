@@ -61,6 +61,8 @@ class FixGLEPair : public Fix {
   
   double *self_data;
   double *cross_data;
+  double *self_data_ft;
+  double *cross_data_ft;
   
   int isInitialized;
   int Nupdate;
@@ -74,10 +76,6 @@ class FixGLEPair : public Fix {
 
   class RanMars *random;
   
-  // cholsky decomp
-  std::vector<Eigen::SparseMatrix<double> > A;
-  std::vector<Eigen::SparseMatrix<double> > a;
-  
   // neighbor list
   int irequest;
   NeighList *list;
@@ -90,7 +88,7 @@ class FixGLEPair : public Fix {
   double time_init;
   double time_int_rel1;
   double time_noise;
-  double time_matrix_update;
+  double time_matrix_create;
   double time_forwardft;
   double time_eigenvalues;
   double time_chebyshev;

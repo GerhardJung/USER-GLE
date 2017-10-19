@@ -52,7 +52,8 @@ using namespace FixConst;
 using namespace std;
 using namespace Eigen;
 typedef ConjugateGradient<SparseMatrix<double>,Lower, IncompleteCholesky<double> > ICCG;
-typedef Eigen::Triplet<double> T;
+typedef Eigen::Triplet<double> Td;
+typedef Eigen::Triplet<int> Ti;
 
 #define MAXLINE 1024
 #define PI 3.14159265359
@@ -103,7 +104,7 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
   time_init = 0.0;
   time_int_rel1 = 0.0;
   time_noise = 0.0;
-  time_matrix_update = 0.0;
+  time_matrix_create = 0.0;
   time_forwardft = 0.0;
   time_eigenvalues = 0.0;
   time_chebyshev = 0.0;
@@ -245,6 +246,49 @@ void FixGLEPair::init()
     neighbor->modify_params(6,c);
   }
   isInitialized = 0;
+  
+  // FFT memory kernel for later processing
+  int N = 2*Nt -2;
+  self_data_ft = new double[Nt];
+  cross_data_ft = new double[Nt*Nd];
+  kiss_fft_scalar * buf;
+  kiss_fft_cpx * bufout;
+  buf=(kiss_fft_scalar*)KISS_FFT_MALLOC(sizeof(kiss_fft_scalar)*N*(1+Nd));
+  bufout=(kiss_fft_cpx*)KISS_FFT_MALLOC(sizeof(kiss_fft_cpx)*N*(1+Nd));
+  memset(bufout,0,sizeof(kiss_fft_cpx)*N*(1+Nd));
+  for (int t=0; t<Nt; t++) {
+    buf[t] = self_data[t];
+    if (t==0 || t==Nt-1){ }
+    else {
+      buf[N-t] = self_data[t];
+    }
+  }
+  for (int d=0; d< Nd; d++) {
+    for (int t=0; t<Nt; t++) {
+      buf[N*(d+1)+t] = cross_data[Nt*d+t];
+      if (t==0 || t==Nt-1){ }
+      else {
+	buf[N*(d+1)+N-t] = cross_data[Nt*d+t];
+      }
+    }
+  }
+  
+  kiss_fftr_cfg st = kiss_fftr_alloc( N ,0 ,0,0);
+  for (int i=0; i<1+Nd;i++) {
+    kiss_fftr( st ,&buf[i*N],&bufout[i*N] );
+  }
+  
+  
+  for (int t=0; t<Nt; t++) {
+    self_data_ft[t] = bufout[t].r;
+    //printf("%f\n",self_data_ft[t]);
+  }
+  for (int d=0; d< Nd; d++) {
+    for (int t=0; t<Nt; t++) {
+      cross_data_ft[Nt*d+t] = bufout[N*(d+1)+t].r;
+    }
+  }
+  free(st);
 }
 
 /* ----------------------------------------------------------------------
@@ -311,7 +355,7 @@ void FixGLEPair::initial_integrate(int vflag)
   
   // determine dissipative contribution
     t1 = MPI_Wtime();
-  n = lastindexn;
+  /*n = lastindexn;
   m = lastindexn-1;
   if (m==-1) m=Nt-1;
   for (int t = 1; t < Nt; t++) {
@@ -328,7 +372,7 @@ void FixGLEPair::initial_integrate(int vflag)
     m--;
     if (n==-1) n=Nt-1;
     if (m==-1) m=Nt-1;
-  }
+  }*/
   t2 = MPI_Wtime();
   time_int_rel1 += t2 -t1;
   
@@ -457,7 +501,7 @@ void FixGLEPair::final_integrate()
     printf("processor %d: time(init) = %f\n",me,time_init);
     printf("processor %d: time(int_rel1) = %f\n",me,time_int_rel1);
     printf("processor %d: time(noise) = %f\n",me,time_noise);
-    printf("processor %d: time(matrix_update) = %f\n",me,time_matrix_update);
+    printf("processor %d: time(matrix_create) = %f\n",me,time_matrix_create);
     printf("processor %d: time(forwardft) = %f\n",me,time_forwardft);
     printf("processor %d: time(eigenvalues) = %f\n",me,time_eigenvalues);
     printf("processor %d: time(chebyshev) = %f\n",me,time_chebyshev);
@@ -590,7 +634,7 @@ void FixGLEPair::read_input()
   }
   
   // read cross_memory
-  for (d=0; d< Nd; d++) {
+  for (int d=0; d< Nd; d++) {
     for (t=0; t<Nt; t++) {
       fscanf(input,"%lf %lf %lf\n",&dummy_d, &dummy_t, &mem);
       cross_data[Nt*d+t] = mem*update->dt;
@@ -623,134 +667,71 @@ void FixGLEPair::update_cholesky()
   numneigh = list->numneigh;
   firstneigh = list->firstneigh;
   int non_zero=0;
-  int *row;
-  int *col;
   double t1 = MPI_Wtime();
-  std::vector<T> tripletList;
-  A.clear();
-  a.clear();
-  
-  for (int t = 0; t < Nt; t++) {
-    Eigen::SparseMatrix<double> A0_sparse(nlocal*d,nlocal*d);
-    // access the neighbor lists
-    for (int ii = 0; ii < inum; ii++) {
-      i = ilist[ii];
-      xtmp = x[i][0];
-      ytmp = x[i][1];
-      ztmp = x[i][2];
-      itype = type[i];
-      itag = tag[i]-1;
-      jlist = firstneigh[i];
-      jnum = numneigh[i];
-      
-      // set self-correlation
-      for (int dim1=0; dim1<d;dim1++) {
-	tripletList.push_back(T(d*itag+dim1,d*itag+dim1,self_data[t]));
-	if (t==0) non_zero++;
-      }
-      
-      //set cross-correlation
-      for (jj = 0; jj < jnum; jj++) {
-	j = jlist[jj];
-	j &= NEIGHMASK;
-	jtype = type[j];
-	jtag = tag[j]-1;
-	
-	dr[0] = xtmp - x[j][0];
-	dr[1] = ytmp - x[j][1];
-	dr[2] = ztmp - x[j][2];
+  std::vector<Td> tripletListd;
+  std::vector<Ti> tripletListi;
+  Eigen::SparseMatrix<double > A_FT(d*nlocal,d*nlocal);
+  Eigen::SparseMatrix<int > A_dist(d*nlocal,d*nlocal);
 
-	rsq = dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2];
-	rsqi = 1/rsq;
-	dist = (sqrt(rsq) - dStart)/dStep;
-	    
-	if (dist < 0) {
-	  error->all(FLERR,"Particles closer than lower cutoff in fix/pair/jung\n");
-	} else if (dist < Nd) {
-	  /*double data = cross_data[Nt*dist+t];
-	  for (int dim1=0; dim1<d;dim1++) {
-	    for (int dim2=0; dim2<d;dim2++) {
-	      if (data*dr[dim1]*dr[dim2]*rsqi != 0) {
-		tripletList.push_back(T(d*itag+dim1,d*jtag+dim2,data*dr[dim1]*dr[dim2]*rsqi));
-		if (t==0) non_zero++;
-	      }
-	    }
-	  }*/
-	}
-      }
-    }
-    A0_sparse.setFromTriplets(tripletList.begin(), tripletList.end());
-    tripletList.clear();
-    A.push_back(A0_sparse);
-    //if (t==10) cout << A0_sparse << endl;
-  }
-  //printf("non_zero %d\n",non_zero);
-  delete [] dr;
-  double t2 = MPI_Wtime();
-  time_matrix_update += t2-t1;
-  
-  // init column and row indices
-  row = new int[non_zero];
-  col = new int[non_zero];
+  // step 1: create matrix A_FT (for t=0)
   int counter = 0;
-  for (int k=0; k<A[0].outerSize(); ++k) {
-    for (SparseMatrix<double>::InnerIterator it(A[0],k); it; ++it) {
-      col[counter] = it.col();
-      row[counter] = it.row();
-      counter++;
-    }
-  }
-  
-  // step 1: perform FT for every entry of A
   int N = 2*Nt-2;
   int size = d*nlocal;
-  kiss_fft_scalar * buf;
-  kiss_fft_cpx * bufout;
-  buf=(kiss_fft_scalar*)KISS_FFT_MALLOC(sizeof(kiss_fft_scalar)*N*non_zero);
-  bufout=(kiss_fft_cpx*)KISS_FFT_MALLOC(sizeof(kiss_fft_cpx)*N*non_zero);
-  memset(bufout,0,sizeof(kiss_fft_cpx)*N*non_zero);
-  t1 = MPI_Wtime();
-  for (int t=0; t<Nt; t++) {
-    int counter = 0;
-    for (int k=0; k<A[t].outerSize(); ++k) {
-      for (SparseMatrix<double>::InnerIterator it(A[t],k); it; ++it) {
-	buf[counter*N+t] = it.value();
-	if (t==0 || t==Nt-1){ }
-	else {
-	  buf[counter*N+N-t] = it.value();
+  for (int ii = 0; ii < inum; ii++) {
+    i = ilist[ii];
+    xtmp = x[i][0];
+    ytmp = x[i][1];
+    ztmp = x[i][2];
+    itype = type[i];
+    itag = tag[i]-1;
+    jlist = firstneigh[i];
+    jnum = numneigh[i];
+      
+    // set self-correlation
+    for (int dim1=0; dim1<d;dim1++) {
+      tripletListd.push_back(Td(itag*d+dim1,itag*d+dim1,self_data_ft[0]));
+      tripletListi.push_back(Ti(itag*d+dim1,itag*d+dim1,-1));
+    }
+      
+    //set cross-correlation
+    for (jj = 0; jj < jnum; jj++) {
+      j = jlist[jj];
+      j &= NEIGHMASK;
+      jtype = type[j];
+      jtag = tag[j]-1;
+	
+      dr[0] = xtmp - x[j][0];
+      dr[1] = ytmp - x[j][1];
+      dr[2] = ztmp - x[j][2];
+
+      rsq = dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2];
+      rsqi = 1/rsq;
+      dist = (sqrt(rsq) - dStart)/dStep;
+	    
+      if (dist < 0) {
+	error->all(FLERR,"Particles closer than lower cutoff in fix/pair/jung\n");
+      } else if (dist < Nd) {
+	for (int dim1=0; dim1<d;dim1++) {
+	  for (int dim2=0; dim2<d;dim2++) {
+	    double proj = dr[dim1]*dr[dim2]*rsqi;
+	    tripletListd.push_back(Td(itag*d+dim1,jtag*d+dim2,cross_data_ft[dist*Nt]*proj));
+	    tripletListi.push_back(Ti(itag*d+dim1,jtag*d+dim2,dist));
+	  }
 	}
-	counter++;
       }
     }
   }
+  A_FT.setFromTriplets(tripletListd.begin(), tripletListd.end());
+  A_dist.setFromTriplets(tripletListi.begin(), tripletListi.end());
+  delete [] dr;
+  double t2 = MPI_Wtime();
+  time_matrix_create += t2-t1;
 
-  // do the fft with kiss_fft
-  kiss_fftr_cfg st = kiss_fftr_alloc( N ,0 ,0,0);
-  for (int i=0; i<non_zero;i++) {
-    kiss_fftr( st ,&buf[i*N],&bufout[i*N] );
-  }
-  free(st);
-
-  std::vector<Eigen::SparseMatrix<double> > A_FT;
-  //printf("FT_A\n");
-  for (int t=0; t<Nt; t++) {
-    Eigen::SparseMatrix<double> A_FT0_sparse(nlocal*d,nlocal*d);
-    //printf("\n%d ",t);
-    for (int i=0; i<non_zero;i++) {
-      tripletList.push_back(T(row[i],col[i],bufout[i*N+t].r));
-      //printf("%f %f ",bufout[i*N+t].r,buf[i*N+t]);
-    }
-    A_FT0_sparse.setFromTriplets(tripletList.begin(), tripletList.end());
-    tripletList.clear();
-    A_FT.push_back(A_FT0_sparse);
-    //cout << A_FT0_sparse;
-  }
-  delete [] row;
-  delete [] col;
-    // step 40: determine FT noise vector
-  free(buf);
+  // step 2: determine FT noise vector
+  t1 = MPI_Wtime();
+  kiss_fft_scalar * buf;
+  kiss_fft_cpx * bufout;
   buf=(kiss_fft_scalar*)KISS_FFT_MALLOC(sizeof(kiss_fft_scalar)*size*N);
-  free(bufout);
   bufout=(kiss_fft_cpx*)KISS_FFT_MALLOC(sizeof(kiss_fft_cpx)*size*N);
   memset(bufout,0,sizeof(kiss_fft_cpx)*size*N);
   int nt0 = lastindexN;
@@ -764,7 +745,7 @@ void FixGLEPair::update_cholesky()
     if (nt0==-1) nt0=2*Nt-3;
   }  
   // FFT evaluation
-  st = kiss_fftr_alloc( N ,0 ,0,0);
+  kiss_fftr_cfg st = kiss_fftr_alloc( N ,0 ,0,0);
   for (int i=0; i<size;i++) {
     kiss_fftr( st ,&buf[i*N],&bufout[i*N] );
   }
@@ -773,7 +754,7 @@ void FixGLEPair::update_cholesky()
   time_forwardft += t2-t1;
   //printf("-------------------------------\n");
   
-  // step 2: determine eigenvalue bounds of A_FT matrices
+  // step 3: use lanczos method to compute sqrt-Matrix
   t1 = MPI_Wtime();
   int mLanczos = 50;
   double tolLanczos = 0.00001;
@@ -781,7 +762,27 @@ void FixGLEPair::update_cholesky()
   // main Lanczos loop, determine eigenvalue bounds
   // choose twice the size to include complex values
   std::vector<VectorXd> FT_w;
+  
   for (int t=0; t<Nt; t++) {
+    double t1 = MPI_Wtime();
+    if (t>0) {
+      int counter = 0;
+      for (int k=0; k<A_FT.outerSize(); ++k) {
+	for (SparseMatrix<double>::InnerIterator it(A_FT,k); it; ++it) {
+	  int dist = A_dist.valuePtr()[counter];
+	  //printf("%d\n",dist);
+	  if (dist == -1) {
+	    it.valueRef() *= self_data_ft[t]/self_data_ft[t-1];
+	    //printf("%f\n",it.valueRef());
+	  }
+	  else it.valueRef() *= cross_data_ft[dist*Nt+t]/cross_data_ft[dist*Nt+t-1];
+	  counter++;
+	}
+      }
+    }
+    double t2 = MPI_Wtime();
+    time_chebyshev += t2-t1;
+    //cout << A_FT << endl;
     for (int s = 0; s<2; s++) { 
       Eigen::MatrixXd Vn;
       //printf("test0\n");
@@ -804,7 +805,7 @@ void FixGLEPair::update_cholesky()
       }
       norm = Vn.col(0).norm();
       Vn.col(0) = Vn.col(0).normalized();
-      rk = A_FT[t] * Vn.col(0);
+      rk = A_FT * Vn.col(0);
       alpha[1] = (Vn.col(0).adjoint()*rk).value();
       //printf("\n");
       for (int k=2; k<=mLanczos; k++) {
@@ -818,7 +819,7 @@ void FixGLEPair::update_cholesky()
 	//printf("test3\n");
 	Vn.col(k-1) = rk.normalized();
       
-	rk = A_FT[t] * Vn.col(k-1);
+	rk = A_FT * Vn.col(k-1);
 	alpha[k] = (Vn.col(k-1).adjoint()*rk).value();
 
 	//printf("Lanczos Step %d: alpha %f, beta %f evMin %f, evMax %f\n",k,alpha[k-1],beta[k],evMin,evMax);
@@ -861,7 +862,10 @@ void FixGLEPair::update_cholesky()
 	    VectorXd diff = (FT_w[2*t+s] - xk);
 	    double diff_norm = diff.norm();
 	    FT_w[2*t+s] = xk;
-	    if (diff_norm < tolLanczos) break;
+	    if (diff_norm < tolLanczos) {
+	      printf("%d\n",k);
+	      break;
+	    }
 	    //printf("%d %f\n",k,diff_norm);
 	  }
 	  //printf("sol %d\n",k);
@@ -896,12 +900,6 @@ void FixGLEPair::update_cholesky()
     for (int i=0; i<size;i++) {
       bufout[i*N+t].r = FT_w[2*t](i);
       bufout[i*N+t].i = FT_w[2*t+1](i);
-      /*if (t==0 || t==Nt-1){ }
-	else {
-	  bufout[i*N+N-t].r = frl_final[t](i).real();
-      bufout[i*N+N-t].i = frl_final[t](i).imag();
-	}*/
-      
     }
   }
   

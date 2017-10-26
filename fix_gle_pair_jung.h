@@ -13,23 +13,28 @@
 
 #ifdef FIX_CLASS
 
-FixStyle(gle/pair,FixGLEPair)
+FixStyle(gle/pair/jung,FixGLEPairJung)
 
 #else
 
-#ifndef LMP_FIX_GLE_PAIR_H
-#define LMP_FIX_GLE_PAIR_H
+#ifndef LMP_FIX_GLE_PAIR_JUNG_H
+#define LMP_FIX_GLE_PAIR_JUNG_H
 
 #include "fix.h"
+#include <iostream>
+#include <stdlib.h> 
+#include <Eigen/Dense>
+#include <Eigen/Eigen>
+#include <vector>
 
 #define USE_CHEBYSHEV
 
 namespace LAMMPS_NS {
 
-class FixGLEPair : public Fix {
+class FixGLEPairJung : public Fix {
  public:
-  FixGLEPair(class LAMMPS *, int, char **);
-  virtual ~FixGLEPair();
+  FixGLEPairJung(class LAMMPS *, int, char **);
+  virtual ~FixGLEPairJung();
   int setmask();
   virtual void init();
   virtual void initial_integrate(int);
@@ -40,52 +45,61 @@ class FixGLEPair : public Fix {
   void grow_arrays(int);
 
  protected:
-  int me;
+  double dtv,dtf, int_a,int_b;
   double t_target;
 
-  // read in
   FILE * input;
   char* keyword;
+  int memory_flag;
+  
   double dStart,dStep,dStop;
   int Nd;
   double tStart,tStep,tStop;
   int Nt;
+  int Niter;
+  int d,d2;
+  
   double *self_data;
   double *cross_data;
-  double *self_data_ft;
-  double *cross_data_ft;
   
-  // system constants and data
-  int d,d2;
-  double dtf, int_a,int_b;
+  int isInitialized;
+  int Nupdate;
   double **ran;
   double **fd;
   double **fr;
   double **x_save;
+  double **x_save_update;
   int lastindexN,lastindexn;
   double **fc;
 
   class RanMars *random;
   
+  // cholsky decomp
+  std::vector<Eigen::SparseMatrix<double> > A;
+  std::vector<Eigen::SparseMatrix<double> > a;
+  
   // neighbor list
   int irequest;
   NeighList *list;
+ 
   
-  // timing 
+  // Timing 
+  int me;
   double t1,t2;
   double time_read;
   double time_init;
   double time_int_rel1;
   double time_noise;
-  double time_matrix_create;
-  double time_forwardft;
-  double time_sqrt;
-  double time_backwardft;
   double time_dist_update;
   double time_int_rel2;
   
   void read_input();
-  void update_noise();
+  void update_cholesky();
+  
+ private:
+  inline int sbmask(int j) {
+    return j >> SBBITS & 3;
+  }
 };
 
 }

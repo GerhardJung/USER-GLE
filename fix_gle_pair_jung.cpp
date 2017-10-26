@@ -327,6 +327,9 @@ void FixGLEPairJung::initial_integrate(int vflag)
   t2 = MPI_Wtime();
   time_int_rel1 += t2 -t1;
   
+  //printf("jung fr %f %f %f\n",fr[0][0],fr[0][1],fr[0][2]);
+  //printf("jung fd %f %f %f\n",fd[0][0],fd[0][1],fd[0][2]);
+  
   // Advance X by dt
   for (int i = 0; i < nlocal; i++) {
     if (mask[i] & groupbit) {

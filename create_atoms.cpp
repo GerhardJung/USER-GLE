@@ -259,25 +259,22 @@ void CreateAtoms::command(int narg, char **arg)
       xvar = input->variable->find(xstr);
       if (xvar < 0)
         error->all(FLERR,"Variable name for create_atoms does not exist");
-      if (!input->variable->equalstyle(xvar))
+      if (!input->variable->internalstyle(xvar))
         error->all(FLERR,"Variable for create_atoms is invalid style");
-      input->variable->equal_save(xvar,xstr_copy);
     }
     if (ystr) {
       yvar = input->variable->find(ystr);
       if (yvar < 0)
         error->all(FLERR,"Variable name for create_atoms does not exist");
-      if (!input->variable->equalstyle(yvar))
+      if (!input->variable->internalstyle(yvar))
         error->all(FLERR,"Variable for create_atoms is invalid style");
-      input->variable->equal_save(yvar,ystr_copy);
     }
     if (zstr) {
       zvar = input->variable->find(zstr);
       if (zvar < 0)
         error->all(FLERR,"Variable name for create_atoms does not exist");
-      if (!input->variable->equalstyle(zvar))
+      if (!input->variable->internalstyle(zvar))
         error->all(FLERR,"Variable for create_atoms is invalid style");
-      input->variable->equal_save(zvar,zstr_copy);
     }
   }
 
@@ -375,36 +372,9 @@ void CreateAtoms::command(int narg, char **arg)
   else if (style == RANDOM) add_random();
   else add_lattice();
 
-  // invoke set_arrays() for fixes/computes/variables
-  //   that need initialization of attributes of new atoms
-  // don't use modify->create_attributes() since would be inefficient
-  //   for large number of atoms
-  // note that for typical early use of create_atoms,
-  //   no fixes/computes/variables exist yet
-
-  int nlocal = atom->nlocal;
-  for (int m = 0; m < modify->nfix; m++) {
-    Fix *fix = modify->fix[m];
-    if (fix->create_attribute)
-      for (int i = nlocal_previous; i < nlocal; i++)
-        fix->set_arrays(i);
-  }
-  for (int m = 0; m < modify->ncompute; m++) {
-    Compute *compute = modify->compute[m];
-    if (compute->create_attribute)
-      for (int i = nlocal_previous; i < nlocal; i++)
-        compute->set_arrays(i);
-  }
-  for (int i = nlocal_previous; i < nlocal; i++)
-    input->variable->set_arrays(i);
-
-  // restore each equal variable string previously saved
-
-  if (varflag) {
-    if (xstr) input->variable->equal_restore(xvar,xstr_copy);
-    if (ystr) input->variable->equal_restore(yvar,ystr_copy);
-    if (zstr) input->variable->equal_restore(zvar,zstr_copy);
-  }
+  // init per-atom fix/compute/variable values for created atoms
+  
+  atom->data_fix_compute_variable(nlocal_previous,atom->nlocal);
 
   // set new total # of atoms and error check
 
@@ -904,16 +874,17 @@ void CreateAtoms::add_molecule(double *center, double *quat_user)
 
 /* ----------------------------------------------------------------------
    test a generated atom position against variable evaluation
-   first plug in x,y,z values as requested
+   first set x,y,z values in internal variables
 ------------------------------------------------------------------------- */
 
 int CreateAtoms::vartest(double *x)
 {
-  if (xstr) input->variable->equal_override(xvar,x[0]);
-  if (ystr) input->variable->equal_override(yvar,x[1]);
-  if (zstr) input->variable->equal_override(zvar,x[2]);
+  if (xstr) input->variable->internal_set(xvar,x[0]);
+  if (ystr) input->variable->internal_set(yvar,x[1]);
+  if (zstr) input->variable->internal_set(zvar,x[2]);
 
   double value = input->variable->compute_equal(vvar);
+
   if (value == 0.0) return 0;
   return 1;
 }

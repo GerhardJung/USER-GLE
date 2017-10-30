@@ -40,6 +40,11 @@ class PairDPDJung : public Pair {
   virtual void write_data(FILE *);
   virtual void write_data_all(FILE *);
   double single(int, int, int, int, double, double, double, double &);
+  
+  int me;
+  double time_mvm;
+  double time_inv;
+  double t1,t2;
 
  protected:
   double cut_global,temperature;
@@ -50,6 +55,9 @@ class PairDPDJung : public Pair {
   class RanMars *random;
 
   void allocate();
+  
+  void compute_step(double* input, double* output);
+  void compute_inverse(double* input, double* output);
 };
 
 }

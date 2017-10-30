@@ -18,6 +18,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <iostream>
 #include "pair_dpd_jung.h"
 #include "atom.h"
 #include "atom_vec.h"
@@ -29,8 +30,12 @@
 #include "random_mars.h"
 #include "memory.h"
 #include "error.h"
+#include <Eigen/Dense>
+#include <Eigen/Eigen>
 
+using namespace Eigen;
 using namespace LAMMPS_NS;
+using namespace std;
 
 #define EPSILON 1.0e-10
 
@@ -40,6 +45,10 @@ PairDPDJung::PairDPDJung(LAMMPS *lmp) : Pair(lmp)
 {
   writedata = 1;
   random = NULL;
+  
+  MPI_Comm_rank(world,&me);
+  time_mvm = 0.0;
+  time_inv = 0.0;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -63,7 +72,7 @@ PairDPDJung::~PairDPDJung()
 
 void PairDPDJung::compute(int eflag, int vflag)
 {
-  int i,j,ii,jj,inum,jnum,itype,jtype;
+  int i,j,ii,jj,inum,jnum,itype,jtype,itag,jtag;
   double xtmp,ytmp,ztmp,delx,dely,delz,evdwl,fpair;
   double vxtmp,vytmp,vztmp,delvx,delvy,delvz;
   double rsq,r,rinv,dot,wd,randnum,factor_dpd;
@@ -77,6 +86,7 @@ void PairDPDJung::compute(int eflag, int vflag)
   double **v = atom->v;
   double **f = atom->f;
   int *type = atom->type;
+  int *tag = atom->tag;
   int nlocal = atom->nlocal;
   double *special_lj = force->special_lj;
   int newton_pair = force->newton_pair;
@@ -87,19 +97,21 @@ void PairDPDJung::compute(int eflag, int vflag)
   numneigh = list->numneigh;
   firstneigh = list->firstneigh;
 
-  // loop over neighbors of my atoms
-  double *dr = new double[3];
-  double *dv = new double[3];
-  double proj,proj0,rsqi;
+  // loop over neighbors of my atoms, to determine force input vector
+  double *f_step = new double[3*atom->nlocal];
+  double *dr = new double[3*atom->nlocal];
+  for (i=0; i<atom->nlocal; i++) {
+    f_step[3*i] = dr[3*i] = 0.0;
+    f_step[3*i+1] = dr[3*i+1] = 0.0;
+    f_step[3*i+2] = dr[3*i+2] = 0.0;
+  }
   for (ii = 0; ii < inum; ii++) {
     i = ilist[ii];
     xtmp = x[i][0];
     ytmp = x[i][1];
     ztmp = x[i][2];
-    vxtmp = v[i][0];
-    vytmp = v[i][1];
-    vztmp = v[i][2];
     itype = type[i];
+    itag = tag[i]-1;
     jlist = firstneigh[i];
     jnum = numneigh[i];
 
@@ -108,47 +120,36 @@ void PairDPDJung::compute(int eflag, int vflag)
       factor_dpd = special_lj[sbmask(j)];
       j &= NEIGHMASK;
 
-      dr[0] = delx = xtmp - x[j][0];
-      dr[1] = dely = ytmp - x[j][1];
-      dr[2] = dely = ztmp - x[j][2];
+      delx = xtmp - x[j][0];
+      dely = ytmp - x[j][1];
+      delz = ztmp - x[j][2];
       rsq = delx*delx + dely*dely + delz*delz;
       jtype = type[j];
+      jtag = tag[j] -1;
 
       if (rsq < cutsq[itype][jtype]) {
-	rsqi = 1.0/rsq;
         r = sqrt(rsq);
         if (r < EPSILON) continue;     // r can be 0.0 in DPD systems
         rinv = 1.0/r;
-        dv[0] = delvx = vxtmp - v[j][0];
-        dv[1] = delvy = vytmp - v[j][1];
-        dv[2] = delvz = vztmp - v[j][2];
         dot = delx*delvx + dely*delvy + delz*delvz;
         wd = 1.0 - r/cut[itype][jtype];
         randnum = random->gaussian();
-	proj0=-gamma[itype][jtype]*wd*wd*rsqi;
 
         // conservative force = a0 * wd
         // drag force = -gamma * wd^2 * (delx dot delv) / r
         // random force = sigma * wd * rnd * dtinvsqrt;
 
         fpair = a0[itype][jtype]*wd;
-        //fpair -= gamma[itype][jtype]*wd*wd*dot*rinv;
-	for (int dim1=0; dim1<3;dim1++) {
-	  for (int dim2=0; dim2<3;dim2++) {
-	    double proj =proj0*dr[dim1]*dr[dim2];
-	    f[i][dim1] += proj*dv[dim2];
-	  }
-	}
         fpair += sigma[itype][jtype]*wd*randnum*dtinvsqrt;
         fpair *= factor_dpd*rinv;
 
-        f[i][0] += delx*fpair;
-        f[i][1] += dely*fpair;
-        f[i][2] += delz*fpair;
+        f_step[3*itag] += delx*fpair;
+        f_step[3*itag+1] += dely*fpair;
+        f_step[3*itag+2] += delz*fpair;
         if (newton_pair || j < nlocal) {
-          f[j][0] -= delx*fpair;
-          f[j][1] -= dely*fpair;
-          f[j][2] -= delz*fpair;
+          f_step[3*jtag] -= delx*fpair;
+          f_step[3*jtag+1] -= dely*fpair;
+          f_step[3*jtag+2] -= delz*fpair;
         }
 
         if (eflag) {
@@ -165,8 +166,48 @@ void PairDPDJung::compute(int eflag, int vflag)
     }
   }
   
-  delete [] dr;
-  delete [] dv;
+  for (i=0; i<atom->nlocal; i++) {
+    f_step[3*i] *= update->dt*update->dt/2.0;
+    f_step[3*i+1] *= update->dt*update->dt/2.0;
+    f_step[3*i+2] *= update->dt*update->dt/2.0;
+    
+    f_step[3*i] += update->dt*v[i][0];
+    f_step[3*i+1] += update->dt*v[i][0];
+    f_step[3*i+2] += update->dt*v[i][0];
+    //printf("%f %f %f\n",f_step[3*i],f_step[3*i+1],f_step[3*i+2]);
+  }
+  
+  t1 = MPI_Wtime();
+  compute_inverse(f_step,dr);
+  t2 = MPI_Wtime();
+  time_mvm += t2 -t1;
+  
+  // test step
+  /*double *test_input = new double[12];
+  double *test_output = new double[12];
+  for (i=0; i<12; i++) {
+    test_input[i]=0.0;
+  }
+  test_input[0] = 1.0;
+  
+  compute_step(test_input,test_output);
+  for (i=0; i<6; i++) {
+    printf("%f ",test_output[i]);
+  }
+  printf("\n");
+  
+  // test inverse
+  compute_inverse(test_input, test_output);
+  for (i=0; i<12; i++) {
+    printf("%f ",test_output[i]);
+  }
+  printf("\n");*/
+  
+  //printf("%f %f\n",update->nsteps,update->ntimestep);
+  if (update->nsteps == update->ntimestep) {
+    printf("processor %d: time(mvm) = %f\n",me,time_mvm);
+    printf("processor %d: time(inv) = %f\n",me,time_inv);
+  }
 
   if (vflag_fdotr) virial_fdotr_compute();
 }
@@ -420,4 +461,191 @@ double PairDPDJung::single(int i, int j, int itype, int jtype, double rsq,
 
   phi = 0.5*a0[itype][jtype]*cut[itype][jtype] * wd*wd;
   return factor_dpd*phi;
+}
+
+/* ----------------------------------------------------------------------
+   multiplies an input vector with interaction matrix
+------------------------------------------------------------------------- */
+
+void PairDPDJung::compute_step(double* input, double* output)
+{
+  int i,j,ii,jj,inum,jnum,itype,jtype,itag,jtag;
+  double xtmp,ytmp,ztmp,delx,dely,delz,evdwl,fpair;
+  double vxtmp,vytmp,vztmp,delvx,delvy,delvz;
+  double rsq,r,rinv,dot,wd,randnum,factor_dpd;
+  int *ilist,*jlist,*numneigh,**firstneigh;
+
+  double **x = atom->x;
+  int *type = atom->type;
+  int nlocal = atom->nlocal;
+  int *tag = atom->tag;
+  double *special_lj = force->special_lj;
+  int newton_pair = force->newton_pair;
+  double dtinvsqrt = 1.0/sqrt(update->dt);
+  
+  double pre = -update->dt / 2.0;
+
+  inum = list->inum;
+  ilist = list->ilist;
+  numneigh = list->numneigh;
+  firstneigh = list->firstneigh;
+
+  // loop over neighbors of my atoms
+  for (ii = 0; ii < inum; ii++) {
+    i = ilist[ii];
+    xtmp = x[i][0];
+    ytmp = x[i][1];
+    ztmp = x[i][2];
+    vxtmp = input[3*i];
+    vytmp = input[3*i+1];
+    vztmp = input[3*i+2];
+    itype = type[i];
+    itag = tag[i] -1;
+    jlist = firstneigh[i];
+    jnum = numneigh[i];
+    
+    //add unity matrix
+    output[3*itag] += input[3*itag];
+    output[3*itag+1] += input[3*itag+1];
+    output[3*itag+2] += input[3*itag+2];
+    //pre = 1.0;
+
+    for (jj = 0; jj < jnum; jj++) {
+      j = jlist[jj];
+      factor_dpd = special_lj[sbmask(j)];
+      j &= NEIGHMASK;
+
+      delx = xtmp - x[j][0];
+      dely = ytmp - x[j][1];
+      delz = ztmp - x[j][2];
+      rsq = delx*delx + dely*dely + delz*delz;
+      jtype = type[j];
+      jtag = tag[j] -1;
+
+      if (rsq < cutsq[itype][jtype]) {
+        r = sqrt(rsq);
+        if (r < EPSILON) continue;     // r can be 0.0 in DPD systems
+        rinv = 1.0/r;
+        delvx = vxtmp - input[3*jtag];
+        delvy = vytmp - input[3*jtag+1];
+        delvz = vztmp - input[3*jtag+2];
+        dot = delx*delvx + dely*delvy + delz*delvz;
+        wd = 1.0 - r/cut[itype][jtype];
+        fpair = -gamma[itype][jtype]*wd*wd*dot*rinv;
+        fpair *= pre*factor_dpd*rinv;
+
+        output[3*itag] += delx*fpair;
+        output[3*itag+1] += dely*fpair;
+        output[3*itag+2] += delz*fpair;
+        if (newton_pair || j < nlocal) {
+          output[3*jtag] -= delx*fpair;
+          output[3*jtag+1] -= dely*fpair;
+          output[3*jtag+2] -= delz*fpair;
+        }
+      }
+    }
+  }
+}
+
+/* ----------------------------------------------------------------------
+   computer inverse matrix for precise integration
+------------------------------------------------------------------------- */
+void PairDPDJung::compute_inverse(double* input, double* output)
+{
+  t1 = MPI_Wtime();
+  int i,j;
+  int mLanczos = 10;
+  double tolLanczos = 0.00001;
+
+  // main Lanczos loop, determine krylov subspace
+  int size = atom->nlocal*3; 
+  Eigen::MatrixXd Vn;
+  Vn.resize(size,1);
+  for (i=0; i< size; i++) {
+    Vn.col(0)(i) = input[i];
+  }
+  //cout << Vn << endl;
+  VectorXd rk = VectorXd::Zero(size);
+  VectorXd xk_save;
+  double *alpha = new double[mLanczos+1];
+  double *beta = new double[mLanczos+1];
+  for (int k=0; k<mLanczos+1; k++) {
+    alpha[k] = 0.0;
+    beta[k] = 0.0;
+  }
+  // input vector is the FFT of the (uncorrelated) noise vector
+  double norm = 0.0;
+  norm = Vn.col(0).norm();
+  Vn.col(0) = Vn.col(0).normalized();
+  compute_step(&Vn.col(0)(0),&rk(0));
+  //cout << rk << endl;
+  alpha[1] = (Vn.col(0).adjoint()*rk).value();
+
+  // main laczos loop
+  for (int k=2; k<=mLanczos; k++) {
+    rk = rk - alpha[k-1]*Vn.col(k-2);
+    //cout << rk << endl;
+    if (k>2) rk -= beta[k-2]*Vn.col(k-3);
+    beta[k-1] = rk.norm();
+    // set new v
+    Vn.conservativeResize(size,k);
+    Vn.col(k-1) = rk.normalized();
+    //rk = A_FT * Vn.col(k-1);
+    compute_step(&Vn.col(k-1)(0),&rk(0));
+    alpha[k] = (Vn.col(k-1).adjoint()*rk).value();
+
+    if (k>=2) {
+      //generate result vector by contructing Hessenberg-Matrix
+      Eigen::MatrixXd Hk = Eigen::MatrixXd::Zero(k,k);
+      for (i=0; i<k; i++) {
+	for (j=0; j<k; j++) {
+	  if (i==j) Hk(i,j) = alpha[i+1];
+	  if (i==j+1||i==j-1) {
+	    int kprime = j;
+	    if (i>j) kprime = i;
+	    Hk(i,j) = beta[kprime];
+	  }
+	}
+      }
+
+      // determine inverse-matrix (only on the small Hessenberg-Matrix)
+      MatrixXd f_Hk = Hk.inverse();
+      //cout << Hk << endl;
+      // determine result vector
+      VectorXd e1 = VectorXd::Zero(k);
+      e1(0) = 1.0;
+      VectorXd f_Hk1 = f_Hk * e1;
+      VectorXd xk = Vn*f_Hk1*norm; 
+      if (k==2) xk_save = xk;
+      else {
+	VectorXd diff = (xk_save - xk);
+	double diff_norm = diff.norm();
+	xk_save = xk;
+	//cout << xk_save << endl;
+	//printf("\n");
+	// check for convergence
+	if (diff_norm < tolLanczos) {
+	  printf("%d\n",k);
+	  //break;
+	}
+      }
+    }
+  }
+  
+  //cout << xk_save << endl;
+  for (i=0; i< size; i++) {
+    output[i] = xk_save(i);
+  }
+  
+  // test
+  double* test_out = new double[size];
+  compute_step(output,test_out);
+  for (i=0; i< size; i++) {
+    printf("%f %f %f\n",input[i],output[i],test_out[i]);
+  }
+  
+  delete [] alpha;
+  delete [] beta;
+  t2 = MPI_Wtime();
+  time_inv += t2-t1;
 }

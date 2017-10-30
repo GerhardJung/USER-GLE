@@ -27,6 +27,7 @@ Careful:
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "fix_gle_pair.h"
 #include "math_extra.h"
 #include "atom.h"

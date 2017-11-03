@@ -109,6 +109,9 @@ void PairDPDJung::compute(int eflag, int vflag)
       xtmp = x[i][0];
       ytmp = x[i][1];
       ztmp = x[i][2];
+          vxtmp = v[i][0];
+    vytmp = v[i][1];
+    vztmp = v[i][2];
       itype = type[i];
       itag = tag[i]-1;
       jlist = firstneigh[i];
@@ -130,6 +133,9 @@ void PairDPDJung::compute(int eflag, int vflag)
 	  r = sqrt(rsq);
 	  if (r < EPSILON) continue;     // r can be 0.0 in DPD systems
 	  rinv = 1.0/r;
+	          delvx = vxtmp - v[j][0];
+        delvy = vytmp - v[j][1];
+        delvz = vztmp - v[j][2];
 	  dot = delx*delvx + dely*delvy + delz*delvz;
 	  wd = 1.0 - r/cut[itype][jtype];
 	  randnum = random->gaussian();
@@ -140,8 +146,10 @@ void PairDPDJung::compute(int eflag, int vflag)
 
 	  fpair_c = a0[itype][jtype]*wd;
 	  fpair_r = sigma[itype][jtype]*wd*randnum*dtinvsqrt;
+	  fpair_d =- gamma[itype][jtype]*wd*wd*dot*rinv;
 	  fpair_c *= factor_dpd*rinv;
 	  fpair_r *= factor_dpd*rinv;
+	  fpair_d *= factor_dpd*rinv;
 
 	  fcn1[3*itag] += delx*fpair_c;
 	  fcn1[3*itag+1] += dely*fpair_c;
@@ -150,6 +158,10 @@ void PairDPDJung::compute(int eflag, int vflag)
 	  frn1[3*itag] += delx*fpair_r;
 	  frn1[3*itag+1] += dely*fpair_r;
 	  frn1[3*itag+2] += delz*fpair_r;
+	  
+	  fdn1[3*itag] += delx*fpair_d;
+	  fdn1[3*itag+1] += dely*fpair_d;
+	  fdn1[3*itag+2] += delz*fpair_d;
 	  if (newton_pair || j < nlocal) {
 	    fcn1[3*jtag] -= delx*fpair_c;
 	    fcn1[3*jtag+1] -= dely*fpair_c;
@@ -158,6 +170,10 @@ void PairDPDJung::compute(int eflag, int vflag)
 	    frn1[3*jtag] -= delx*fpair_r;
 	    frn1[3*jtag+1] -= dely*fpair_r;
 	    frn1[3*jtag+2] -= delz*fpair_r;
+	    
+	    fdn1[3*jtag] -= delx*fpair_d;
+	    fdn1[3*jtag+1] -= dely*fpair_d;
+	    fdn1[3*jtag+2] -= delz*fpair_d;
 	  }
 	}
       }
@@ -185,9 +201,12 @@ void PairDPDJung::compute(int eflag, int vflag)
     frn1[3*i] = 0.0;
     frn1[3*i+1] = 0.0;
     frn1[3*i+2] = 0.0;
-    fdn[3*i] = 0.0;
-    fdn[3*i+1] = 0.0;
-    fdn[3*i+2] = 0.0;
+    fdn[3*i] = fdn1[3*i];
+    fdn[3*i+1] = fdn1[3*i+1];
+    fdn[3*i+2] = fdn1[3*i+2];
+    fdn1[3*i] = 0.0;
+    fdn1[3*i+1] = 0.0;
+    fdn1[3*i+2] = 0.0;
   }
   
   /*  double **res_matrix;
@@ -212,23 +231,23 @@ void PairDPDJung::compute(int eflag, int vflag)
   
   for (i=0; i<atom->nlocal; i++) {
     itag = tag[i] -1;
-    fn[3*itag] = update->dt*v[i][0] + update->dt*update->dt/2.0*fcn[3*itag] + update->dt*update->dt/2.0*frn[3*itag];
-    fn[3*itag+1] = update->dt*v[i][1] + update->dt*update->dt/2.0*fcn[3*itag+1] + update->dt*update->dt/2.0*frn[3*itag+1];
-    fn[3*itag+2] = update->dt*v[i][2] + update->dt*update->dt/2.0*fcn[3*itag+2] + update->dt*update->dt/2.0*frn[3*itag+2];
+    fn[3*itag] = update->dt*v[i][0] + update->dt*update->dt/2.0*fcn[3*itag] + update->dt*update->dt/2.0*frn[3*itag]+update->dt*update->dt/2.0*fdn[3*itag];
+    fn[3*itag+1] = update->dt*v[i][1] + update->dt*update->dt/2.0*fcn[3*itag+1] + update->dt*update->dt/2.0*frn[3*itag+1]+update->dt*update->dt/2.0*fdn[3*itag+1];
+    fn[3*itag+2] = update->dt*v[i][2] + update->dt*update->dt/2.0*fcn[3*itag+2] + update->dt*update->dt/2.0*frn[3*itag+2]+update->dt*update->dt/2.0*fdn[3*itag+2];
     
     //printf("%f %f %f\n",f_step[3*i],f_step[3*i+1],f_step[3*i+2]);
   }
   t2 = MPI_Wtime();
   time_mvm += t2 -t1;
   
-  compute_inverse(fn,drn);
+  //compute_inverse(fn,drn);
   
   // integrate position
   for (i=0; i<atom->nlocal; i++) {
     itag = tag[i] -1;
-    x[i][0] += drn[3*itag];
-    x[i][1] += drn[3*itag+1];
-    x[i][2] += drn[3*itag+2];
+    x[i][0] += fn[3*itag];
+    x[i][1] += fn[3*itag+1];
+    x[i][2] += fn[3*itag+2];
     //printf("x: %d %f %f %f\n",i,x[i][0],x[i][1],x[i][2]);
   }
   // update positions in neighbor list
@@ -243,6 +262,9 @@ void PairDPDJung::compute(int eflag, int vflag)
     xtmp = x[i][0];
     ytmp = x[i][1];
     ztmp = x[i][2];
+              vxtmp = v[i][0];
+    vytmp = v[i][1];
+    vztmp = v[i][2];
     itype = type[i];
     itag = tag[i]-1;
     jlist = firstneigh[i];
@@ -264,6 +286,9 @@ void PairDPDJung::compute(int eflag, int vflag)
         r = sqrt(rsq);
         if (r < EPSILON) continue;     // r can be 0.0 in DPD systems
         rinv = 1.0/r;
+		          delvx = vxtmp - v[j][0];
+        delvy = vytmp - v[j][1];
+        delvz = vztmp - v[j][2];
         dot = delx*delvx + dely*delvy + delz*delvz;
         wd = 1.0 - r/cut[itype][jtype];
         randnum = random->gaussian();
@@ -274,8 +299,10 @@ void PairDPDJung::compute(int eflag, int vflag)
 
         fpair_c = a0[itype][jtype]*wd;
 	fpair_r = sigma[itype][jtype]*wd*randnum*dtinvsqrt;
+		  fpair_d =- gamma[itype][jtype]*wd*wd*dot*rinv;
 	fpair_c *= factor_dpd*rinv;
 	fpair_r *= factor_dpd*rinv;
+	fpair_d *= factor_dpd*rinv;
 
 	fcn1[3*itag] += delx*fpair_c;
 	fcn1[3*itag+1] += dely*fpair_c;
@@ -284,6 +311,10 @@ void PairDPDJung::compute(int eflag, int vflag)
 	frn1[3*itag] += delx*fpair_r;
 	frn1[3*itag+1] += dely*fpair_r;
 	frn1[3*itag+2] += delz*fpair_r;
+	
+	fdn1[3*itag] += delx*fpair_d;
+	fdn1[3*itag+1] += dely*fpair_d;
+	fdn1[3*itag+2] += delz*fpair_d;
 	if (newton_pair || j < nlocal) {
 	  fcn1[3*jtag] -= delx*fpair_c;
 	  fcn1[3*jtag+1] -= dely*fpair_c;
@@ -292,6 +323,10 @@ void PairDPDJung::compute(int eflag, int vflag)
 	  frn1[3*jtag] -= delx*fpair_r;
 	  frn1[3*jtag+1] -= dely*fpair_r;
 	  frn1[3*jtag+2] -= delz*fpair_r;
+	  
+	  fdn1[3*jtag] -= delx*fpair_d;
+	  fdn1[3*jtag+1] -= dely*fpair_d;
+	  fdn1[3*jtag+2] -= delz*fpair_d;
 	}
         
         if (eflag) {
@@ -307,7 +342,7 @@ void PairDPDJung::compute(int eflag, int vflag)
       }
     }
   }
-  
+ /* 
   // update dissipative force
   for (ii = 0; ii < inum; ii++) {
     i = ilist[ii];
@@ -359,14 +394,14 @@ void PairDPDJung::compute(int eflag, int vflag)
         }
       }
     }
-  }
+  }*/
   
   // integrate velocity
   for (i=0; i<atom->nlocal; i++) {
     itag = tag[i] -1;
-    v[i][0] += update->dt/2.0*(fcn[3*itag]+fcn1[3*itag]) + fdn[3*itag] + update->dt/2.0*(frn[3*itag]+frn1[3*itag]);
-    v[i][1] += update->dt/2.0*(fcn[3*itag+1]+fcn1[3*itag+1]) + fdn[3*itag+1] + update->dt/2.0*(frn[3*itag+1]+frn1[3*itag+1]);
-    v[i][2] += update->dt/2.0*(fcn[3*itag+2]+fcn1[3*itag+2]) + fdn[3*itag+2] + update->dt/2.0*(frn[3*itag+2]+frn1[3*itag+2]);
+    v[i][0] += update->dt/2.0*(fcn[3*itag]+fcn1[3*itag]) +  update->dt/2.0*(fdn[3*itag]+fdn1[3*itag]) + update->dt/2.0*(frn[3*itag]+frn1[3*itag]);
+    v[i][1] += update->dt/2.0*(fcn[3*itag+1]+fcn1[3*itag+1]) + update->dt/2.0*(fdn[3*itag+1]+fdn1[3*itag+1]) + update->dt/2.0*(frn[3*itag+1]+frn1[3*itag+1]);
+    v[i][2] += update->dt/2.0*(fcn[3*itag+2]+fcn1[3*itag+2]) + update->dt/2.0*(fdn[3*itag+2]+fdn1[3*itag+2]) + update->dt/2.0*(frn[3*itag+2]+frn1[3*itag+2]);
     //printf("v: %d %f %f %f\n",i,v[i][0],v[i][1],v[i][2]);
   }
   

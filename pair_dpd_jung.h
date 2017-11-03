@@ -21,6 +21,8 @@ PairStyle(dpd/jung,PairDPDJung)
 #define LMP_PAIR_DPD_JUNG_H
 
 #include "pair.h"
+#include <Eigen/Dense>
+#include <Eigen/Eigen>
 
 namespace LAMMPS_NS {
 
@@ -53,11 +55,26 @@ class PairDPDJung : public Pair {
   double **a0,**gamma;
   double **sigma;
   class RanMars *random;
+  Eigen::MatrixXd res_matrix_eigen;
+  
+  double *fn;
+  double *drn;
+  double *fcn;
+  double *fcn1;
+  double *frn;
+  double *frn1;
+  double *fdn;
+  double *fdn1;
+  
+  int initialized;
+    int irequest;
+      NeighList *my_list;
 
   void allocate();
   
   void compute_step(double* input, double* output);
   void compute_inverse(double* input, double* output);
+  void create_matrix(double** output);
 };
 
 }

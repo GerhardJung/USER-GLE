@@ -343,7 +343,10 @@ void FixGLEPair::initial_integrate(int vflag)
   int j,dim2,ii,jj,inum,jnum,itype,jtype,jtag;
   double xtmp,ytmp,ztmp,rsq,rsqi;
   int *ilist,*jlist,*numneigh,**firstneigh;
-  neighbor->build_one(list);
+  domain->pbc();
+  comm->exchange();
+  comm->borders();
+  neighbor->build();
   inum = list->inum;
   ilist = list->ilist;
   numneigh = list->numneigh;
@@ -675,7 +678,7 @@ void FixGLEPair::update_noise()
   double *dr = new double[3];
   double proj;
   int *ilist,*jlist,*numneigh,**firstneigh;
-  neighbor->build_one(list);
+
   inum = list->inum;
   ilist = list->ilist;
   numneigh = list->numneigh;

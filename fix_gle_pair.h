@@ -38,6 +38,8 @@ class FixGLEPair : public Fix {
 
   double memory_usage();
   void grow_arrays(int);
+  void write_restart(FILE *fp);
+  void restart(char *buf);
 
  protected:
   int me;
@@ -56,7 +58,7 @@ class FixGLEPair : public Fix {
   double *cross_data_ft;
   
   // system constants and data
-  int d,d2;
+  int d;
   double dtf, int_a,int_b;
   double **ran;
   double **fd;
@@ -86,6 +88,7 @@ class FixGLEPair : public Fix {
   
   void read_input();
   void update_noise();
+  void compute_step(int w, int* dist_pair_list, double **dr_pair_list, double* input, double* output);
 };
 
 }

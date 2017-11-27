@@ -926,6 +926,9 @@ void FixGLEPair::update_noise()
   t2 = MPI_Wtime();
   time_backwardft += t2-t1;
   free(buf); free(bufout);
+  
+  memory->destroy(dr_pair_list);
+  delete [] dist_pair_list;
 }
 
 /* ----------------------------------------------------------------------

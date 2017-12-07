@@ -862,6 +862,7 @@ void FixAveCorrelatePeratom::end_of_step()
 
   t1 = MPI_Wtime();
 
+  // care here, that sometimes the index changes -> use tag[a]
   if(memory_switch!=GROUP){
     for (i = 0; i < nvalues; i++) {
       v2i = value2index[i];
@@ -875,10 +876,13 @@ void FixAveCorrelatePeratom::end_of_step()
 	if (memory_switch==PERPAIR) {
 	  peratom_data= compute->array_atom[(argindex[i]-1)*nlocal];
 	} else {
-	  if (argindex[i] == 0) {
+	  if (argindex[i] == 0)
 	    peratom_data= compute->vector_atom;
-	  } else {
-	    peratom_data= compute->array_atom[argindex[i]-1];
+	  else{
+	    memory->create(peratom_data, nlocal, "ave/correlation/peratom:peratom_data");
+	    for (a= 0; a < nlocal; a++) {
+	      peratom_data[tag[a]-1] = compute->array_atom[a][argindex[i]-1];
+	    }
 	  }
 	}
       // access fix fields, guaranteed to be ready
@@ -1335,38 +1339,45 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
     incr_nvalues = 3;
   }
 
-  for (i = 0; i < nvalues; i+=incr_nvalues) {
-    //determine whether just autocorrelation or also mixed correlation (different observables)
-    double nvalues_upper = i+1;
-    if (type == AUTOUPPER || type == UPPERCROSS || type == FULL) nvalues_upper = nvalues;
-    double nvalues_lower = i;
-    if (type == FULL) nvalues_lower = 0;
-    for (j = nvalues_lower; j < nvalues_upper; j+=incr_nvalues) {
-      //printf("i %d j %d ipair %d\n",i,j,ipair);
-      for (a= 0; a < ngroup_glo; a++) {
-	//determine whether just autocorrelation or also cross correlation (different atoms)
-	double ngroup_lower = a;
-	double ngroup_upper = a+1;
-	if (type == CROSS || type == AUTOCROSS || type == UPPERCROSS){
-	  ngroup_lower = a;
-	  ngroup_upper = ngroup_glo;
-	}
-	for (b = ngroup_lower; b < ngroup_upper; b++) {
-	  if ((type == CROSS || type == UPPERCROSS) && a==b) continue;
-
-	  //initialize counter for work distribution
-	  m = lastindex - sample_start;
-	  if (m < 0) m = nsave+m;
-	  //printf("%d\n",m);
-	  int inda,indb;
-	  if(memory_switch==PERATOM){
-	    inda=indices_group[a];
-	    indb=indices_group[b];
-	  } else {
-	    inda = a;
-	    indb = b;
+  	  
+  #if defined (_OPENMP)
+  #pragma omp parallel private(a,b,ipair,k,m,n,ind,offset,i,j,delx,dely,delz,rsq,dist,delx_t,dely_t,delz_t,dist_t,delx_0,dely_0,delz_0,dist_0,fabx_t,faby_t,fabz_t,fabx_0,faby_0,fabz_0,fabr_0,fabr_t,ind_t,ind_0) default(none) shared(sample_stop, sample_start,indices_group,incr_nvalues) 
+  #endif
+  {
+    int kfrom, kto, tid;
+    loop_setup_thr(kfrom, kto, tid, sample_stop - sample_start,comm->nthreads);
+    for (i = 0; i < nvalues; i+=incr_nvalues) {
+      //determine whether just autocorrelation or also mixed correlation (different observables)
+      double nvalues_upper = i+1;
+      if (type == AUTOUPPER || type == UPPERCROSS || type == FULL) nvalues_upper = nvalues;
+      double nvalues_lower = i;
+      if (type == FULL) nvalues_lower = 0;
+      for (j = nvalues_lower; j < nvalues_upper; j+=incr_nvalues) {
+	//printf("i %d j %d ipair %d\n",i,j,ipair);
+	for (a= 0; a < ngroup_glo; a++) {
+	  //determine whether just autocorrelation or also cross correlation (different atoms)
+	  double ngroup_lower = a;
+	  double ngroup_upper = a+1;
+	  if (type == CROSS || type == AUTOCROSS || type == UPPERCROSS){
+	    ngroup_lower = a;
+	    ngroup_upper = ngroup_glo;
 	  }
-	    for (k = sample_start; k < sample_stop; k++) {
+	  for (b = ngroup_lower; b < ngroup_upper; b++) {
+	    if ((type == CROSS || type == UPPERCROSS) && a==b) continue;
+
+	    //initialize counter for work distribution
+	    //printf("%d\n",m);
+	    int inda,indb;
+	    if(memory_switch==PERATOM){
+	      inda=indices_group[a];
+	      indb=indices_group[b];
+	    } else {
+	      inda = a;
+	      indb = b;
+	    }
+	    m = lastindex - sample_start - kfrom;
+	    if (m < 0) m = nsave+m;
+	    for (k = sample_start+kfrom; k < sample_start+kto; k++) {
 	      if (variable_flag == VAR_DEPENDENED){
 		double dV = variable_store[inda][m] - variable_store[indb][n];
 		dV=fabs(dV);
@@ -1411,43 +1422,43 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 		  dist_0 = sqrt(delx_0*delx_0 + dely_0*dely_0 + delz_0*delz_0);
 		  
 		  if (cross_flag ==0) {
-		   if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && i >= nvalues_pg)) {
+		  if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && i >= nvalues_pg)) {
 		    fabx_t = array[inda*ngroup_glo+indb][ i*nsave + m];
 		    faby_t = array[inda*ngroup_glo+indb][ i*nsave + nsave + m];
 		    fabz_t = array[inda*ngroup_glo+indb][ i*nsave + 2*nsave + m];
-		   } else {
+		  } else {
 		    fabx_t = array[inda][ i*nsave + m];
 		    faby_t = array[inda][ i*nsave + nsave + m];
 		    fabz_t = array[inda][ i*nsave + 2*nsave + m];
-		   }
-		   if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && j >= nvalues_pg)) {
+		  }
+		  if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && j >= nvalues_pg)) {
 		    fabx_0 = array[inda*ngroup_glo+indb][ j*nsave + n];
 		    faby_0 = array[inda*ngroup_glo+indb][ j*nsave + nsave + n];
 		    fabz_0 = array[inda*ngroup_glo+indb][ j*nsave + 2*nsave + n];
-		   } else {
+		  } else {
 		    fabx_0 = array[indb][ j*nsave + n];
 		    faby_0 = array[indb][ j*nsave + nsave + n];
 		    fabz_0 = array[indb][ j*nsave + 2*nsave + n];
-		   }
+		  }
 		  } else {
-		   if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && i >= nvalues_pg)) {
+		  if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && i >= nvalues_pg)) {
 		    fabx_t = array[inda*ngroup_glo+indb][ i*nsave + m];
 		    faby_t = array[inda*ngroup_glo+indb][ i*nsave + nsave + m];
 		    fabz_t = array[inda*ngroup_glo+indb][ i*nsave + 2*nsave + m];
-		   } else {
+		  } else {
 		    fabx_t = array[inda][ i*nsave + m] - array[indb][ i*nsave + m];
 		    faby_t = array[inda][ i*nsave + nsave + m] - array[indb][ i*nsave + nsave + m];
 		    fabz_t = array[inda][ i*nsave + 2*nsave + m] - array[indb][ i*nsave + 2*nsave + m];
-		   }
-		   if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && j >= nvalues_pg)) {
+		  }
+		  if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && j >= nvalues_pg)) {
 		    fabx_0 = array[inda*ngroup_glo+indb][ j*nsave + n];
 		    faby_0 = array[inda*ngroup_glo+indb][ j*nsave + nsave + n];
 		    fabz_0 = array[inda*ngroup_glo+indb][ j*nsave + 2*nsave + n];
-		   } else {
+		  } else {
 		    fabx_0 = array[inda][ j*nsave + n] - array[indb][ j*nsave + n];
 		    faby_0 = array[inda][ j*nsave + nsave + n] - array[indb][ j*nsave + nsave + n];
 		    fabz_0 = array[inda][ j*nsave + 2*nsave + n] - array[indb][ j*nsave + 2*nsave + n];
-		   }
+		  }
 		  }
 		  
 		  // calculate radial component of the forces/velocities (mapped on the distance vector)
@@ -1477,23 +1488,26 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 		  local_corr_err[offset][ipair] += fabr_t*fabr_0*fabr_t*fabr_0;
 		}
 	      } else { //no variable dependency
+		// since atoms are renamed, you have to access tag[i]
 		double val0 = array[indb][j * nsave + n];
 		double valt = array[inda][i * nsave + m];
+		//if (a==0) printf("%f %f\n",val0,valt);
 		double cor = val0*valt;
 		//printf("%d %f %f\n",n-m,valt,val0);
 		if (type == AUTOCROSS && b!=a) {
 		  if(i==0&&j==0) local_count[k+corr_length/2]+=1.0;
 		  local_corr[k+corr_length/2][ipair] += cor;
 		  local_corr_err[k+corr_length/2][ipair] += cor*cor;
-	  } else {
-		if(i==0&&j==0) local_count[k]+=1.0;
-		local_corr[k][ipair]+= cor;
-		local_corr_err[k][ipair]+= cor*cor;
+		} else {
+		  if(i==0&&j==0) local_count[k]+=1.0;
+		  local_corr[k][ipair]+= cor;
+		  local_corr_err[k][ipair]+= cor*cor;
+		}
 	      }
+	      m--;
+	      if (m < 0) m = nsave-1;
 	    }
-	    m--;
-	    if (m < 0) m = nsave-1;
-	  }
+	  }	
 	}
       }
       ipair++;

@@ -21,6 +21,7 @@ FixStyle(gle/pair,FixGLEPair)
 #define LMP_FIX_GLE_PAIR_H
 
 #include "fix.h"
+#include "thr_omp.h"
 
 #define USE_CHEBYSHEV
 

@@ -22,6 +22,7 @@ FixStyle(ave/correlate/peratom,FixAveCorrelatePeratom)
 
 #include "stdio.h"
 #include "fix.h"
+#include "thr_omp.h"
 
 namespace LAMMPS_NS {
 

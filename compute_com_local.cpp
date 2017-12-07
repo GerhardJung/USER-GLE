@@ -95,6 +95,7 @@ void ComputeCOMLocal::compute_vector()
   double **x = atom->x;
   int *type = atom->type;
   imageint *image = atom->image;
+  double *rmass = atom->rmass;
   double *mass = atom->mass;
   
   // determine group members (dynamically)
@@ -128,7 +129,9 @@ void ComputeCOMLocal::compute_vector()
   // calculate local density
   for (j = 0; j < nlocal; j++) {
     if (mask[j] & jgroupbit) {
-      massone = mass[type[j]];
+      massone = 0.0;
+      if (rmass) massone = rmass[j];
+      else massone = mass[type[j]];
       xtmp = x[j][0];
       ytmp = x[j][1];
       ztmp = x[j][2];
@@ -141,6 +144,7 @@ void ComputeCOMLocal::compute_vector()
 	rsq = delx*delx + dely*dely + delz*delz;
 	if (rsq < r2) { // particle j is in the neighbourhood of a particle i -> contribution to local com
 	  count_loc[i]+= massone;
+	  //printf("%f\n",massone);
 	  com_loc[4*i] += delx * massone;
 	  com_loc[4*i+1] += dely * massone;
 	  com_loc[4*i+2] += delz * massone;

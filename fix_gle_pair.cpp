@@ -46,15 +46,14 @@ Careful:
 #include "group.h"
 #include "domain.h"
 #include <iostream>
-#include <Eigen/Dense>
-#include <Eigen/Eigen>
+#include <vector>
 #include "kiss_fft.h"
 #include "kiss_fftr.h"
+#include "eigenvalues_tridiagonal.h"
 
 using namespace LAMMPS_NS;
 using namespace FixConst;
 using namespace std;
-using namespace Eigen;
 
 #define MAXLINE 1024
 #define PI 3.14159265359
@@ -254,8 +253,6 @@ void FixGLEPair::init()
   // FFT memory kernel for later processing
   int i,t,l;
   int N = 2*Nt -2;
-  self_data_ft = new double[Nt];
-  cross_data_ft = new double[Nt*Nd];
   kiss_fft_scalar * buf;
   kiss_fft_cpx * bufout;
   buf=(kiss_fft_scalar*)KISS_FFT_MALLOC(sizeof(kiss_fft_scalar)*N*(1+Nd));
@@ -694,6 +691,8 @@ void FixGLEPair::read_input()
   
   self_data = new double[Nt];
   cross_data = new double[Nt*Nd];
+  self_data_ft = new double[Nt];
+  cross_data_ft = new double[Nt*Nd];
   double *time = new double[Nt];
   
   //read self_memory
@@ -833,10 +832,10 @@ void FixGLEPair::update_noise()
   const double tolLanczos = 0.0001;
 
   // main Lanczos loop, determine krylov subspace
-  std::vector<VectorXd> FT_w;
+  std::vector<double *> FT_w;
   for (t=0; t<Nt; t++) {
-    VectorXd e1 = VectorXd::Zero(size);
-    FT_w.push_back(e1);
+    double* FT_w_loc = new double[size]; 
+    FT_w.push_back(FT_w_loc);
   }
   int *work = new int[8];
   for (i=0; i<8; i++) {
@@ -846,9 +845,13 @@ void FixGLEPair::update_noise()
 #pragma omp parallel for private(t,i,j) default(none) shared(bufout,dr_pair_list,dist_pair_list,FT_w,work) schedule(dynamic)
 #endif
   for (t=0; t<Nt; t++) {
-    Eigen::MatrixXd Vn;
-    Vn.resize(size,1);
-    VectorXd rk = VectorXd::Zero(size);
+    std::vector<double *> Vn;
+    double* Vn0 = new double[size]; 
+    Vn.push_back(Vn0);
+    double* rk = new double[size]; 
+    for (i=0; i< size; i++) {
+      rk[i] = 0.0;
+    }
     double *alpha = new double[mLanczos+1];
     double *beta = new double[mLanczos+1];
     for (int k=0; k<mLanczos+1; k++) {
@@ -857,71 +860,145 @@ void FixGLEPair::update_noise()
     }
     // input vector is the FFT of the (uncorrelated) noise vector
     double norm = 0.0;
-    Vn.col(0) = VectorXd::Zero(size);
     for (i=0; i< size; i++) {
-      Vn(i,0) = bufout[i*N+t].r;
+      Vn[0][i] = bufout[i*N+t].r;
+      norm += bufout[i*N+t].r*bufout[i*N+t].r;
     }
-    norm = Vn.col(0).norm();
-    Vn.col(0) = Vn.col(0).normalized();
+    norm = sqrt(norm);
+    double normi = 1.0/norm;
+    for (i=0; i< size; i++) {
+      Vn[0][i] *= normi;
+    }
     //rk = A_FT * Vn.col(0);
-    compute_step(t,dist_pair_list,dr_pair_list,Vn.col(0).data(),rk.data());
-    alpha[1] = (Vn.col(0).adjoint()*rk).value();
+    compute_step(t,dist_pair_list,dr_pair_list,Vn[0],rk);
+    for (i=0; i< size; i++) {
+      alpha[1] += Vn[0][i]*rk[i];
+    }
 
     // main laczos loop
     for (int k=2; k<=mLanczos; k++) {
-      rk = rk - alpha[k-1]*Vn.col(k-2);
-      if (k>2) rk -= beta[k-2]*Vn.col(k-3);
-      beta[k-1] = rk.norm();
+      double norm2 = 0.0;
+      for (i=0; i< size; i++) {
+        rk[i] = rk[i] - alpha[k-1]*Vn[k-2][i];
+        if (k>2) rk[i] -= beta[k-2]*Vn[k-3][i];
+	norm2 += rk[i]*rk[i];
+      }
+      norm2 = sqrt(norm2);
+      normi = 1.0/norm2;
+      beta[k-1] = norm2;
       // set new v
-      Vn.conservativeResize(size,k);
-      Vn.col(k-1) = rk.normalized();
+      double* Vnk = new double[size]; 
+      Vn.push_back(Vnk);
+      for (i=0; i< size; i++) {
+	Vn[k-1][i] = normi*rk[i];
+      }
       //rk = A_FT * Vn.col(k-1);
-      compute_step(t,dist_pair_list,dr_pair_list,Vn.col(k-1).data(),rk.data());
-      alpha[k] = (Vn.col(k-1).adjoint()*rk).value();
+      compute_step(t,dist_pair_list,dr_pair_list,Vn[k-1],rk);
+      for (i=0; i< size; i++) {
+	alpha[k] += Vn[k-1][i]*rk[i];
+      }
 
       if (k>=2) {
-	//generate result vector by contructing Hessenberg-Matrix
-	Eigen::MatrixXd Hk = Eigen::MatrixXd::Zero(k,k);
-	for (i=0; i<k; i++) {
-	  for (j=0; j<k; j++) {
-	    if (i==j) Hk(i,j) = alpha[i+1];
-	    if (i==j+1||i==j-1) {
-	      int kprime = j;
-	      if (i>j) kprime = i;
-	      Hk(i,j) = beta[kprime];
+	//generate result vector by contructing Hessenberg-Matrix (and do cholesky-decomposition)
+	/*double * f_Hk = new double[k*k];
+	for (i=0; i<k*k; i++) {
+	  f_Hk[i] = 0.0;
+	}
+	// determine cholesky factors
+	f_Hk[0]=sqrt(alpha[1]);
+	f_Hk[1]=beta[1]/f_Hk[0];
+	// determine cholesky
+	for (i=1; i<k; i++) {
+	  f_Hk[i*k] = sqrt(alpha[i+1]-f_Hk[(i-1)*k+1]*f_Hk[(i-1)*k+1]);
+	  if (i<k-1) f_Hk[i*k+1] = beta[i+1]/f_Hk[i*k];
+	}*/
+	// calculate eigenvalue decompostion of hessenberg matrix
+	double *d = new double[k+1];
+	double *e = new double[k+1];
+	double **z;
+	memory->create(z,k+1,k+1,"gle/pair:z");
+	for (i=0; i<= k; i++) {
+	  d[i] = alpha[i];
+	  e[i] = beta[i];
+	  //printf("%f %f\n",alpha[i],beta[i]);
+	  for (j=0; j<= k; j++) {
+	    if (i==j) z[i][j] = 1.0;
+	    else z[i][j] = 0.0;
+	  }
+	}
+	tqli(d, e, k, z);
+	
+	// calculate sqrt-matrix
+	double **zT;
+	memory->create(zT,k+1,k+1,"gle/pair:zT");
+	for (i=0; i<= k; i++) {
+	  for (j=0; j<= k; j++) {
+	    zT[i][j] = sqrt(d[i])*z[j][i];
+	  }
+	}
+	double **f_Hk;
+	memory->create(f_Hk,k+1,k+1,"gle/pair:f_Hk");
+	for (i=0; i<= k; i++) {
+	  for (int l=0; l<= k; l++) {
+	    f_Hk[i][l] = 0.0;
+	    for (j=0; j<= k; j++) {
+	      f_Hk[i][l] += z[i][j]*zT[j][l];
 	    }
 	  }
 	}
-
-	// determine sqrt-matrix (only on the small Hessenberg-Matrix)
-	Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> Hk_eigen(Hk);
-	Eigen::MatrixXd Hk_eigenvector = Hk_eigen.eigenvectors().real(); 
-	Eigen::MatrixXd Hk_diag = Eigen::MatrixXd::Zero(k,k);
-	for (int i=0; i<k; i++) {
-	  if (Hk_eigen.eigenvalues().real()(i) >= 0)
-	    Hk_diag(i,i) = sqrt(Hk_eigen.eigenvalues().real()(i));
-	  else {
-	    printf("Hk is not positive-definite in pair/gle\n");
-	    //cout << A_FT << endl;
-	    //cout << Hk << endl;
-	    printf("%f\n",Hk_eigen.eigenvalues().real()(i));
-	    error->all(FLERR,"Hk is not positive-definite in pair/gle\n");
+	
+	/*printf("f_Hk\n");
+	for (i=0; i<= k; i++) {
+	  for (j=0; j<= k; j++) {
+	    printf("%f ",f_Hk[i][j]);
+	  }
+	  printf("\n");
+	}
+	
+	for (i=0; i<= k; i++) {
+	  for (int l=0; l<= k; l++) {
+	    z[i][l] = 0.0;
+	    for (j=0; j<= k; j++) {
+	      z[i][l] += f_Hk[i][j]*f_Hk[j][l];
+	    }
 	  }
 	}
-	MatrixXd f_Hk = Hk_eigenvector * Hk_diag * Hk_eigenvector.transpose();
+	
+	printf("f_Hk*f_Hk\n");
+	for (i=0; i<= k; i++) {
+	  for (j=0; j<= k; j++) {
+	    printf("%f ",z[i][j]);
+	  }
+	  printf("\n");
+	}*/
 	  
 	// determine result vector
-	VectorXd e1 = VectorXd::Zero(k);
-	e1(0) = 1.0;
-	VectorXd f_Hk1 = f_Hk * e1;
-	VectorXd xk = Vn*f_Hk1*norm; 
-	if (k==2) FT_w[t]=xk;
+	double *res = new double[size];
+	for (i=0; i< size; i++) {
+	  res[i] = 0.0;
+	  for (j=0; j<k; j++) {
+	    res[i] += Vn[j][i]*f_Hk[1][j+1]*norm;
+	  }
+	}
+	delete [] f_Hk;
+	if (k==2) {
+	  for (i=0; i< size; i++) {
+	    FT_w[t][i]=res[i];
+	  }
+	  delete [] res;
+	}
 	else {
-	  VectorXd diff = (FT_w[t] - xk);
-	  double diff_norm = diff.norm();
-	  FT_w[t] = xk;
+	  double diff = 0.0;
+	  for (i=0; i< size; i++) {
+	    diff += (FT_w[t][i] - res[i])*(FT_w[t][i] - res[i]);
+	  }
+	  diff = sqrt(diff);
+	  for (i=0; i< size; i++) {
+	    FT_w[t][i] = res[i];
+	  }
+	  delete [] res;
 	  // check for convergence
-	  if (diff_norm < tolLanczos) {
+	  if (diff < tolLanczos) {
 	    //printf("proc: %d k: %d\n",omp_get_thread_num(),k);
 	    //work[omp_get_thread_num()]+=k;
 	    break;
@@ -931,6 +1008,11 @@ void FixGLEPair::update_noise()
     }
     delete [] alpha;
     delete [] beta;
+    delete [] rk;
+    for (i=0; i<Vn.size(); i++) {
+      delete [] Vn[i];
+    }
+    Vn.clear();
   }
   
   t2 = MPI_Wtime();
@@ -946,13 +1028,13 @@ void FixGLEPair::update_noise()
     itag = tag[i]-1;
     for (int t = 0; t < Nt; t++) {
       if (t==0 || t==Nt-1) {
-	fr[itag][0]+= FT_w[t](3*itag+0)/N*sqrt(update->dt);
-	fr[itag][1]+= FT_w[t](3*itag+1)/N*sqrt(update->dt);
-	fr[itag][2]+= FT_w[t](3*itag+2)/N*sqrt(update->dt);
+	fr[itag][0]+= FT_w[t][3*itag+0]/N*sqrt(update->dt);
+	fr[itag][1]+= FT_w[t][3*itag+1]/N*sqrt(update->dt);
+	fr[itag][2]+= FT_w[t][3*itag+2]/N*sqrt(update->dt);
       } else {
-	fr[itag][0]+= 2*FT_w[t](3*itag+0)/N*sqrt(update->dt);
-	fr[itag][1]+= 2*FT_w[t](3*itag+1)/N*sqrt(update->dt);
-	fr[itag][2]+= 2*FT_w[t](3*itag+2)/N*sqrt(update->dt);
+	fr[itag][0]+= 2*FT_w[t][3*itag+0]/N*sqrt(update->dt);
+	fr[itag][1]+= 2*FT_w[t][3*itag+1]/N*sqrt(update->dt);
+	fr[itag][2]+= 2*FT_w[t][3*itag+2]/N*sqrt(update->dt);
       }
     }
   }
@@ -961,7 +1043,10 @@ void FixGLEPair::update_noise()
   t2 = MPI_Wtime();
   time_backwardft += t2-t1;
   free(buf); free(bufout);
-  
+  for (t=0; t<Nt; t++) {
+    delete [] FT_w[t];
+  }
+  FT_w.clear();
   memory->destroy(dr_pair_list);
   delete [] dist_pair_list;
 }

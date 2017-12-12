@@ -971,6 +971,10 @@ void FixGLEPair::update_noise()
 	  }
 	  printf("\n");
 	}*/
+	delete [] d;
+	delete [] e;
+	memory->destroy(z);
+	memory->destroy(zT);
 	  
 	// determine result vector
 	double *res = new double[size];
@@ -980,7 +984,7 @@ void FixGLEPair::update_noise()
 	    res[i] += Vn[j][i]*f_Hk[1][j+1]*norm;
 	  }
 	}
-	delete [] f_Hk;
+	memory->destroy(f_Hk);
 	if (k==2) {
 	  for (i=0; i< size; i++) {
 	    FT_w[t][i]=res[i];

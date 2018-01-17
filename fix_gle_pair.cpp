@@ -75,7 +75,7 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
   
   MPI_Comm_rank(world,&me);
 
-  int narg_min = 5;
+  int narg_min = 7;
   if (narg < narg_min) error->all(FLERR,"Illegal fix gle/pair command");
 
   // temperature
@@ -92,6 +92,14 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
     error->one(FLERR,str);
   }
   keyword = arg[6];
+  
+  // set precision of sqrt computation
+  // default
+  mLanczos = 50;
+  tolLanczos = 0.0001;
+  
+  mLanczos = force->inumeric(FLERR,arg[7]);
+  tolLanczos = force->numeric(FLERR,arg[8]);
   
   // error checking for the first set of required input arguments
   if (seed <= 0) error->all(FLERR,"Illegal fix gle/pair command");
@@ -786,6 +794,7 @@ void FixGLEPair::update_noise()
       dr_pair_list[dist_counter][1]*=ri;
       dr_pair_list[dist_counter][2]*=ri;
       dist_pair_list[dist_counter] = dist;
+      //if (r < 6.8) printf("itag %d jtag %d, r: %f idst: %d\n",itag,jtag,r,dist);
       dist_counter++;
     }
   }
@@ -828,8 +837,6 @@ void FixGLEPair::update_noise()
   
   // step 3: use lanczos method to compute sqrt-Matrix
   t1 = MPI_Wtime();
-  const int mLanczos = 50;
-  const double tolLanczos = 0.0001;
 
   // main Lanczos loop, determine krylov subspace
   std::vector<double *> FT_w;
@@ -875,6 +882,7 @@ void FixGLEPair::update_noise()
       alpha[1] += Vn[0][i]*rk[i];
     }
 
+    int warn = 0;
     // main laczos loop
     for (int k=2; k<=mLanczos; k++) {
       double norm2 = 0.0;
@@ -933,6 +941,17 @@ void FixGLEPair::update_noise()
 	memory->create(zT,k+1,k+1,"gle/pair:zT");
 	for (i=0; i<= k; i++) {
 	  for (j=0; j<= k; j++) {
+	    if (d[i] < 0) {
+	      if (warn == 0) {
+		//printf("w %d, iteration %d, eigenvalue %f\n",t,k,d[i]);
+		//error->all(FLERR,"Negative eigenvalue in fix gle/pair decomposition!\n");
+		//error->warning(FLERR,"Negative eigenvalue in fix gle/pair decomposition! Set to zero!\n");
+		warn = 1;
+		d[i] = 0.0;
+	      } else {
+		d[i] = 0.0;
+	      }
+	    }
 	    zT[i][j] = sqrt(d[i])*z[j][i];
 	  }
 	}
@@ -1041,6 +1060,7 @@ void FixGLEPair::update_noise()
 	fr[itag][2]+= 2*FT_w[t][3*itag+2]/N*sqrt(update->dt);
       }
     }
+    //printf(" fr : itag %d  %f %f %f \n",itag,fr[itag][0],fr[itag][1],fr[itag][2]);
   }
   
   

@@ -32,6 +32,7 @@ class ComputeCOMLocal : public Compute {
   void compute_vector();
 
  private:
+   int mode;
   double radius, r2;
   int jgroup,jgroupbit;
   int nmax;
@@ -41,6 +42,10 @@ class ComputeCOMLocal : public Compute {
   double *com_loc;
   double *count_glo;
   double *com_glo;
+  
+  // neighbor list
+  int irequest;
+  NeighList *list;
   
   int ngroup_loc, ngroup_glo,ngroup_scan;
 };

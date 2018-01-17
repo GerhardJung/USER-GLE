@@ -44,7 +44,7 @@ using namespace FixConst;
 enum{COMPUTE,FIX,VARIABLE};
 enum{ONE,RUNNING};
 enum{AUTO,CROSS,AUTOCROSS,AUTOUPPER, UPPERCROSS, FULL};
-enum{PERATOM,PERGROUP, PERPAIR, PERGROUP_PERPAIR, GROUP};
+enum{PERATOM,PERGROUP, PERPAIR, PERGROUP_PERPAIR, GROUP,ATOM};
 enum{NOT_DEPENDENED,VAR_DEPENDENED,DIST_DEPENDENED};
 
 #define INVOKED_SCALAR 1
@@ -70,6 +70,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   global_freq = nfreq;
   // parse values until one isn't recognized
 
+  int i;
   which = new int[narg];
   argindex = new int[narg];
   ids = new char*[narg];
@@ -134,6 +135,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   char *title1 = NULL;
   char *title2 = NULL;
   char *title3 = NULL;
+  body = NULL;
 
   while (iarg < narg) {
     if (strcmp(arg[iarg],"type") == 0) {
@@ -177,19 +179,19 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
     } else if (strcmp(arg[iarg],"variable") == 0) {
       if (iarg+4 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       if (strncmp(arg[iarg+1],"v_",2) == 0) {
-    variable_flag = VAR_DEPENDENED;
-    variable_nvalues = 1;
-    int n = strlen(arg[iarg+1]);
-    char *suffix = new char[n];
-    strcpy(suffix,&arg[iarg+1][2]);
-    n = strlen(suffix) + 1;
-    variable_id = new char[n];
-    strcpy(variable_id,suffix);
-    delete [] suffix;
-      } else if (strcmp(arg[iarg+1],"distance") == 0) {
-    factor = 2;
-    variable_flag = DIST_DEPENDENED;
-    variable_nvalues = 3;
+	variable_flag = VAR_DEPENDENED;
+	variable_nvalues = 1;
+	int n = strlen(arg[iarg+1]);
+	char *suffix = new char[n];
+	strcpy(suffix,&arg[iarg+1][2]);
+	n = strlen(suffix) + 1;
+	variable_id = new char[n];
+	strcpy(variable_id,suffix);
+	delete [] suffix;
+	  } else if (strcmp(arg[iarg+1],"distance") == 0) {
+	factor = 2;
+	variable_flag = DIST_DEPENDENED;
+	variable_nvalues = 3;
       } else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       range = force->numeric(FLERR,arg[iarg+2]);
       bins = force->inumeric(FLERR,arg[iarg+3]);
@@ -271,7 +273,132 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
 	  else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
 	}
 	iarg += 2 + ngroup_glo + nvalues;
-      } else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
+      } else if (strcmp(arg[iarg+1],"atom") == 0) {
+	memory_switch = ATOM;
+	tagint *molecule;
+	int *mask = atom->mask;
+	int nlocal = atom->nlocal;
+	
+	memory->grow(body,atom->nmax,"rigid:body");
+	atom->add_callback(0);
+
+	if (iarg + 3 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
+
+	// determine whether atom-style variable or atom property is used.
+	if (strstr(arg[iarg+2],"v_") == arg[iarg+2]) {
+	  int ivariable = input->variable->find(arg[iarg+2]+2);
+	  if (ivariable < 0)
+	    error->all(FLERR,"Variable name for fix ave/correlate/peratom command atom does not exist");
+	  if (input->variable->atomstyle(ivariable) == 0)
+	    error->all(FLERR,"fix ave/correlate/peratom command atom variable is no atom-style variable");
+	  double *value = new double[nlocal];
+	  input->variable->compute_atom(ivariable,0,value,1,0);
+	  int minval = INT_MAX;
+	  for (i = 0; i < nlocal; i++)
+	    if (mask[i] & groupbit) minval = MIN(minval,(int)value[i]);
+	  int vmin = minval;
+	  MPI_Allreduce(&vmin,&minval,1,MPI_INT,MPI_MIN,world);
+	  molecule = new tagint[nlocal];
+	  for (i = 0; i < nlocal; i++){
+	    if (mask[i] & groupbit) molecule[i] = (tagint)((tagint)value[i] - minval + 1);
+	    //printf("mol %d\n",molecule[i]);
+	  }
+	  delete[] value;
+	} else error->all(FLERR,"Unsupported fix ave/correlate/peratom command atom property");
+	iarg += 3;
+
+	tagint maxmol_tag = -1;
+	for (i = 0; i < nlocal; i++)
+	  if (mask[i] & groupbit) maxmol_tag = MAX(maxmol_tag,molecule[i]);
+
+	tagint itmp;
+	MPI_Allreduce(&maxmol_tag,&itmp,1,MPI_LMP_TAGINT,MPI_MAX,world);
+	if (itmp+1 > MAXSMALLINT)
+	  error->all(FLERR,"Too many molecules for fix ave/correlate/peratom command");
+	maxmol = (int) itmp;
+
+	int *ncount;
+	memory->create(ncount,maxmol+1,"ave/correlate/peratom:ncount");
+	for (i = 0; i <= maxmol; i++) ncount[i] = 0;
+
+	for (i = 0; i < nlocal; i++)
+	  if (mask[i] & groupbit) ncount[molecule[i]]++;
+
+	memory->create(mol2body,maxmol+1,"ave/correlate/peratom:mol2body");
+	MPI_Allreduce(ncount,mol2body,maxmol+1,MPI_INT,MPI_SUM,world);
+
+	nbody = 0;
+	for (i = 0; i <= maxmol; i++)
+	  if (mol2body[i]) mol2body[i] = nbody++;
+	  else mol2body[i] = -1;
+
+	memory->create(body2mol,nbody,"ave/correlate/peratom:body2mol");
+
+	nbody = 0;
+	for (i = 0; i <= maxmol; i++)
+	  if (mol2body[i] >= 0) body2mol[nbody++] = i;
+
+	for (i = 0; i < nlocal; i++) {
+	  body[i] = -1;
+	  if (mask[i] & groupbit) body[i] = mol2body[molecule[i]];
+	}
+	ngroup_glo = maxmol-1;
+	//printf("%d\n",ngroup_glo);
+	
+	memory->destroy(ncount);
+	delete [] molecule;
+	
+	// determine value to be calculated
+	nvalues = force->inumeric(FLERR,arg[iarg]);
+	cor_valbit = new int[nvalues];
+	if (iarg+1+nvalues > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
+	for (int i=0; i<nvalues; i++) {
+	  char *loc_arg = arg[iarg+1+i];
+	  if (strcmp(loc_arg,"vx") == 0) cor_valbit[i] = 1;
+	  else if (strcmp(loc_arg,"vy") == 0) cor_valbit[i] = 2;
+	  else if (strcmp(loc_arg,"vz") == 0) cor_valbit[i] = 3;
+	  else if (strcmp(loc_arg,"fx") == 0) cor_valbit[i] = 4;
+	  else if (strcmp(loc_arg,"fy") == 0) cor_valbit[i] = 5;
+	  else if (strcmp(loc_arg,"fz") == 0) cor_valbit[i] = 6;
+	  else if (strncmp(loc_arg,"c_",2) == 0 ||
+	    strncmp(loc_arg,"f_",2) == 0 ||
+	    strncmp(loc_arg,"v_",2) == 0) {
+	    if (loc_arg[0] == 'c') {
+	      which[i] = COMPUTE;
+	      cor_valbit[i] = 7;
+	    }
+	    else if (loc_arg[0] == 'f') {
+	      cor_valbit[i] = 8;
+	      which[i] = FIX;
+	    }
+	    else if (loc_arg[0] == 'v') {
+	      printf("variable1\n");
+	      cor_valbit[i] = 9;
+	      which[i] = VARIABLE; 
+	      v_counter++;
+	    }
+	    
+	    int n = strlen(loc_arg);
+	    char *suffix = new char[n];
+	    strcpy(suffix,&loc_arg[2]);
+
+	    char *ptr = strchr(suffix,'[');
+	    if (ptr) {
+	      if (suffix[strlen(suffix)-1] != ']')
+		error->all(FLERR,"Illegal fix ave/correlate/peratom command");
+	      argindex[i] = atoi(ptr+1);
+	      *ptr = '\0';
+	    } else argindex[i] = 0;
+
+	    n = strlen(suffix) + 1;
+	    ids[i] = new char[n];
+	    strcpy(ids[i],suffix);
+	    delete [] suffix;
+	  }
+	  else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
+	}
+	iarg += nvalues-1;
+    } else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       iarg += 2;
     } else if (strcmp(arg[iarg],"restart") == 0) {
       restart_global = 1;
@@ -359,7 +486,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   
 
   // check variables (for peratom/pergroup)
-  int i,j,o;
+  int j,o;
   if (memory_switch != GROUP) {
     for (i = 0; i < nvalues; i++) {
       if (which[i] == COMPUTE) {
@@ -418,7 +545,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   if (type == AUTOUPPER) npair = nvalues*(nvalues+1)/2;
   if (type == UPPERCROSS) npair = nvalues/3*(nvalues/3+1)/2;
   if (type == FULL) npair = nvalues*nvalues;
-  printf("npair %d\n",npair);
+  //printf("npair %d\n",npair);
   // print file comment lines
   if (fp && me == 0) {
     if (title1) fprintf(fp,"%s\n",title1);
@@ -460,7 +587,6 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   delete [] title1;
   delete [] title2;
   delete [] title3;
-
 
 
   // allocate and initialize memory for averaging
@@ -568,8 +694,8 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   int *indices_group;
 
   // determine group members
-  if ( memory_switch != GROUP ) {
-    memory->grow(indices_group,ngroup_loc,"ave/correlate/peratomindices_group");
+  if ( memory_switch != GROUP &&   memory_switch != ATOM) {
+    memory->create(indices_group,ngroup_loc,"ave/correlate/peratomindices_group");
     for (a= 0; a < nlocal; a++) {
       if(mask[a] & groupbit) {
 	ngroup_loc++;
@@ -582,7 +708,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
     MPI_Exscan(&ngroup_loc,&ngroup_scan,1,MPI_INT, MPI_SUM, world);
     if((type == AUTOCROSS || type == CROSS || type == UPPERCROSS) && ngroup_glo < 2) error->all(FLERR,"Illegal fix ave/correlate/peratom command: Cross-correlation with only one particle");
   }
-  
+
   array= NULL;
   variable_store=NULL;
   if(nvalues > 0) {
@@ -641,8 +767,12 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
 	for ( j = 0; j < ngroup_glo; j++) group_mass[j]=group_mass_loc[j]=0;
 	for ( a= 0; a < nlocal; a++ ) {
 	// valid saves the index of the group
+	  //printf("%d\n",body[a]);
 	  for ( j = 0; j < ngroup_glo; j++) {
-	    if(mask[a] & cor_groupbit[j]) {
+	    if(memory_switch == GROUP && mask[a] & cor_groupbit[j]) {
+	      group_mass_loc[j]+=mass[type[a]];
+	    }
+	    if(memory_switch == ATOM && body[a] == j+1) {
 	      group_mass_loc[j]+=mass[type[a]];
 	    }
 	  }	
@@ -661,7 +791,8 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
       }
     }
   }
-  if ( memory_switch != GROUP ) {
+
+  if ( memory_switch != GROUP && memory_switch != ATOM ) {
     memory->destroy(indices_group);
   }
 
@@ -707,7 +838,7 @@ FixAveCorrelatePeratom::~FixAveCorrelatePeratom()
     memory->destroy(group_data);
   }
 
-  if (memory_switch != GROUP && memory_switch != PERATOM) memory->destroy(group_ids);
+  if (memory_switch != GROUP && memory_switch != PERATOM && memory_switch != ATOM) memory->destroy(group_ids);
   memory->destroy(group_mass);
 
   if (mean_flag) {
@@ -817,8 +948,8 @@ void FixAveCorrelatePeratom::end_of_step()
   t1 = MPI_Wtime();
 
   // find relevant particles // find group-member on each processor
-  if(memory_switch!=GROUP){
-    memory->grow(indices_group,ngroup_loc,"ave/correlate/peratomindices_group");
+  if(memory_switch!=GROUP && memory_switch!=ATOM){
+    memory->create(indices_group,ngroup_loc,"ave/correlate/peratomindices_group");
     for (a= 0; a < nlocal; a++) {
       if(mask[a] & groupbit) {
 	ngroup_loc++;
@@ -863,7 +994,7 @@ void FixAveCorrelatePeratom::end_of_step()
   t1 = MPI_Wtime();
 
   // care here, that sometimes the index changes -> use tag[a]
-  if(memory_switch!=GROUP){
+  if(memory_switch!=GROUP && memory_switch!=ATOM){
     for (i = 0; i < nvalues; i++) {
       v2i = value2index[i];
       // invoke compute if not previously invoked
@@ -999,10 +1130,15 @@ void FixAveCorrelatePeratom::end_of_step()
       // valid saves the index of the group
       int valid = 0;
       for ( j = 1; j <= ngroup_glo; j++) {
-	if(mask[a] & cor_groupbit[j-1]) {
+	if(memory_switch == GROUP && mask[a] & cor_groupbit[j-1]) {
 	  valid = j;
 	  counter[j-1]++;
-	}
+	} 
+      }
+      
+      if (memory_switch == ATOM) {
+	valid = body[a];
+	if (body[a]!=0) counter[body[a]-1]++;
       }
       
       if(valid) {
@@ -1057,7 +1193,7 @@ void FixAveCorrelatePeratom::end_of_step()
   t1 = MPI_Wtime();
 
   //update variable dependency
-  if(memory_switch!=GROUP){ 
+  if(memory_switch!=GROUP && memory_switch!=ATOM){ 
     if (variable_flag == VAR_DEPENDENED){
       memory->create(peratom_data, nlocal, "ave/correlation/peratom:peratom_data");
       input->variable->compute_atom(variable_value2index, igroup, peratom_data, 1, 0);
@@ -1094,11 +1230,11 @@ void FixAveCorrelatePeratom::end_of_step()
   t1 = MPI_Wtime();
 
   // include pergroup data into global array
-  if( memory_switch==PERGROUP || memory_switch==PERPAIR || memory_switch==PERGROUP_PERPAIR || memory_switch==GROUP ){
+  if( memory_switch==PERGROUP || memory_switch==PERPAIR || memory_switch==PERGROUP_PERPAIR || memory_switch==GROUP || memory_switch ==ATOM){
     if (memory_switch==PERPAIR || memory_switch==PERGROUP_PERPAIR) MPI_Allreduce(&group_data_loc[0][0], &group_data[0][0], ngroup_glo*ngroup_glo*(nvalues+variable_nvalues), MPI_DOUBLE, MPI_SUM, world);
-    else if (memory_switch!= GROUP) MPI_Allreduce(&group_data_loc[0][0], &group_data[0][0], ngroup_glo*(nvalues+variable_nvalues), MPI_DOUBLE, MPI_SUM, world);
+    else if (memory_switch!= GROUP && memory_switch!= ATOM) MPI_Allreduce(&group_data_loc[0][0], &group_data[0][0], ngroup_glo*(nvalues+variable_nvalues), MPI_DOUBLE, MPI_SUM, world);
     else MPI_Allreduce(&group_data_loc[0][0], &group_data[0][0], ngroup_glo*(nvalues), MPI_DOUBLE, MPI_SUM, world);
-    if (memory_switch==GROUP) MPI_Allreduce(counter, counter_glo, ngroup_glo, MPI_INT, MPI_SUM, world);
+    if (memory_switch==GROUP || memory_switch==ATOM) MPI_Allreduce(counter, counter_glo, ngroup_glo, MPI_INT, MPI_SUM, world);
     for (a= 0; a < ngroup_glo; a++) {
       if (memory_switch==PERPAIR || memory_switch==PERGROUP_PERPAIR) {
 	for (b= 0; b < ngroup_glo; b++) {
@@ -1113,7 +1249,7 @@ void FixAveCorrelatePeratom::end_of_step()
 	  array[a][offset] = group_data[a][i];
 	}
       }
-      if (memory_switch==GROUP) {
+      if (memory_switch==GROUP || memory_switch == ATOM) {
 	for (i=0; i< nvalues;i++) {
 	  int offset = i*nsave + lastindex;
 	  if ( cor_valbit[i]==1 || cor_valbit[i]==2 || cor_valbit[i]==3 )  array[a][offset] /= counter_glo[a];
@@ -1123,14 +1259,14 @@ void FixAveCorrelatePeratom::end_of_step()
       if (variable_flag == VAR_DEPENDENED) {
 	variable_store[a][lastindex] = group_data[a][nvalues];
       } else if (variable_flag == DIST_DEPENDENED) {
-	if(memory_switch!=GROUP){ 
+	if(memory_switch!=GROUP && memory_switch!=ATOM){ 
 	  for (r = 0; r < 3 ; r++) {
 	    variable_store[a][lastindex+r*nsave] = group_data[a][nvalues+r];
 	  }
 	} else {
-	  int igroup = cor_group[a];
 	  double xcm[3];
-	  group->xcm(igroup,counter_glo[a],xcm);
+	  if (memory_switch==GROUP) group->xcm(igroup,counter_glo[a],xcm);
+	  else this->xcm(a+1,counter_glo[a],xcm);
 	  variable_store[a][lastindex] = xcm[0];
 	  variable_store[a][lastindex+nsave] = xcm[1];
 	  variable_store[a][lastindex+2*nsave] = xcm[2];
@@ -1156,7 +1292,7 @@ void FixAveCorrelatePeratom::end_of_step()
   t1 = MPI_Wtime();
   accumulate(indices_group, ngroup_loc);
   t2 = MPI_Wtime();
-  time_calc += t2 - t1;
+  //time_calc += t2 - t1;
 
   t1 = MPI_Wtime();
   //calculate mean
@@ -1167,11 +1303,11 @@ void FixAveCorrelatePeratom::end_of_step()
   time_calc_mean += t2 - t1;
 
   double tt2 = MPI_Wtime();
-  time_total += tt2-tt1;
+  //time_total += tt2-tt1;
 
   if (ntimestep % nfreq || first) {
     first = 0;
-    if(memory_switch!=GROUP) {
+    if(memory_switch!=GROUP && memory_switch!=ATOM) {
       memory->destroy(indices_group);
     } else {
       delete [] counter;
@@ -1284,22 +1420,22 @@ void FixAveCorrelatePeratom::end_of_step()
   lastindex  = 0;
   if(ntimestep != update->nsteps ) accumulate(indices_group, ngroup_loc);
 
-  if(memory_switch!=GROUP) {
+  if(memory_switch!=GROUP && memory_switch!=ATOM) {
     memory->destroy(indices_group);
   } else {
     delete [] counter;
     delete [] counter_glo;
   }
- 
+
 
   // print timing
-  /*printf("processor %d: time(init_compute) = %f\n",me,time_init_compute);
-  printf("processor %d: time(calc+write_nvalues) = %f\n",me,calc_write_nvalues);
-  printf("processor %d: time(write_var) = %f\n",me,write_var);
-  printf("processor %d: time(reduce_write_global) = %f\n",me,reduce_write_global);
+ // printf("processor %d: time(init_compute) = %f\n",me,time_init_compute);
+  //printf("processor %d: time(calc+write_nvalues) = %f\n",me,calc_write_nvalues);
+  //printf("processor %d: time(write_var) = %f\n",me,write_var);
+  //printf("processor %d: time(reduce_write_global) = %f\n",me,reduce_write_global);
   printf("processor %d: time(calc) = %f\n",me,time_calc);
-  printf("processor %d: time(red_calc) = %f\n",me,time_calc_mean);
-  printf("processor %d: time(total) = %f\n",me,time_total);*/
+  //printf("processor %d: time(red_calc) = %f\n",me,time_calc_mean);
+  printf("processor %d: time(total) = %f\n",me,time_total);
 }
 
 /* ----------------------------------------------------------------------
@@ -1307,6 +1443,7 @@ void FixAveCorrelatePeratom::end_of_step()
 ------------------------------------------------------------------------- */
 void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 {
+  //printf("test\n");
   int a,b,i,j,k,o,m,n,ipair;
   int ind,offset, ind_t, ind_0;
   int t = nsample - nsave;
@@ -1333,17 +1470,17 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 
   // accumulate
   n = lastindex;
-  ipair = 0;
   int incr_nvalues = 1;
   if (variable_flag == DIST_DEPENDENED){
     incr_nvalues = 3;
   }
 
-  	  
+  double t1 = MPI_Wtime();
   #if defined (_OPENMP)
-  #pragma omp parallel private(a,b,ipair,k,m,n,ind,offset,i,j,delx,dely,delz,rsq,dist,delx_t,dely_t,delz_t,dist_t,delx_0,dely_0,delz_0,dist_0,fabx_t,faby_t,fabz_t,fabx_0,faby_0,fabz_0,fabr_0,fabr_t,ind_t,ind_0) default(none) shared(sample_stop, sample_start,indices_group,incr_nvalues) 
+  #pragma omp parallel private(a,b,ipair,k,m,ind,offset,i,j,delx,dely,delz,rsq,dist,delx_t,dely_t,delz_t,dist_t,delx_0,dely_0,delz_0,dist_0,fabx_t,faby_t,fabz_t,fabx_0,faby_0,fabz_0,fabr_0,fabr_t,ind_t,ind_0) default(none) shared(n,sample_stop, sample_start,indices_group,incr_nvalues) 
   #endif
   {
+    ipair = 0;
     int kfrom, kto, tid;
     loop_setup_thr(kfrom, kto, tid, sample_stop - sample_start,comm->nthreads);
     for (i = 0; i < nvalues; i+=incr_nvalues) {
@@ -1375,8 +1512,27 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 	      inda = a;
 	      indb = b;
 	    }
+	    
+	    // jump if not in range
+	    if (variable_flag == VAR_DEPENDENED){
+	      double dV = variable_store[inda][n] - variable_store[indb][n];
+	      dV=fabs(dV);
+	      if(dV>range) continue;
+	    } 
+	    if (variable_flag == DIST_DEPENDENED){
+	      delx = variable_store[inda][n] -variable_store[indb][n];
+	      dely = variable_store[inda][n+nsave]-variable_store[indb][n+nsave]  ;
+	      delz = variable_store[inda][n+2*nsave]- variable_store[indb][n+2*nsave];
+	      domain->minimum_image(delx,dely,delz);
+	      rsq = delx*delx + dely*dely + delz*delz;
+	      dist = sqrt (rsq);
+	      if(dist>range) continue;
+	    }
+	    
+	    // calc correlation
 	    m = lastindex - sample_start - kfrom;
 	    if (m < 0) m = nsave+m;
+	    double t1 = MPI_Wtime();
 	    for (k = sample_start+kfrom; k < sample_start+kto; k++) {
 	      if (variable_flag == VAR_DEPENDENED){
 		double dV = variable_store[inda][m] - variable_store[indb][n];
@@ -1410,6 +1566,7 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 		//  printf("dist %d %d: %f\n",a,b,dist);
 		//}
 		if(dist<range){
+		  double disti = 1.0/dist;
 		  delx_t = variable_store[inda][m] -variable_store[indb][m];
 		  dely_t = variable_store[inda][m+nsave]-variable_store[indb][m+nsave]  ;
 		  delz_t = variable_store[inda][m+2*nsave]- variable_store[indb][m+2*nsave];
@@ -1420,50 +1577,48 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 		  delz_0 = variable_store[inda][n+2*nsave]- variable_store[indb][n+2*nsave];
 		  domain->minimum_image(delx_0,dely_0,delz_0);
 		  dist_0 = sqrt(delx_0*delx_0 + dely_0*dely_0 + delz_0*delz_0);
-		  
 		  if (cross_flag ==0) {
-		  if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && i >= nvalues_pg)) {
-		    fabx_t = array[inda*ngroup_glo+indb][ i*nsave + m];
-		    faby_t = array[inda*ngroup_glo+indb][ i*nsave + nsave + m];
-		    fabz_t = array[inda*ngroup_glo+indb][ i*nsave + 2*nsave + m];
-		  } else {
-		    fabx_t = array[inda][ i*nsave + m];
-		    faby_t = array[inda][ i*nsave + nsave + m];
-		    fabz_t = array[inda][ i*nsave + 2*nsave + m];
+		    if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && i >= nvalues_pg)) {
+		      fabx_t = array[inda*ngroup_glo+indb][ i*nsave + m];
+		      faby_t = array[inda*ngroup_glo+indb][ i*nsave + nsave + m];
+		      fabz_t = array[inda*ngroup_glo+indb][ i*nsave + 2*nsave + m];
+		    } else {
+		      fabx_t = array[inda][ i*nsave + m];
+		      faby_t = array[inda][ i*nsave + nsave + m];
+		      fabz_t = array[inda][ i*nsave + 2*nsave + m];
+		    }
+		    if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && j >= nvalues_pg)) {
+		      fabx_0 = array[inda*ngroup_glo+indb][ j*nsave + n];
+		      faby_0 = array[inda*ngroup_glo+indb][ j*nsave + nsave + n];
+		      fabz_0 = array[inda*ngroup_glo+indb][ j*nsave + 2*nsave + n];
+		    } else {
+		      fabx_0 = array[indb][ j*nsave + n];
+		      faby_0 = array[indb][ j*nsave + nsave + n];
+		      fabz_0 = array[indb][ j*nsave + 2*nsave + n];
+		    }
+		    } else {
+		    if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && i >= nvalues_pg)) {
+		      fabx_t = array[inda*ngroup_glo+indb][ i*nsave + m];
+		      faby_t = array[inda*ngroup_glo+indb][ i*nsave + nsave + m];
+		      fabz_t = array[inda*ngroup_glo+indb][ i*nsave + 2*nsave + m];
+		    } else {
+		      fabx_t = array[inda][ i*nsave + m] - array[indb][ i*nsave + m];
+		      faby_t = array[inda][ i*nsave + nsave + m] - array[indb][ i*nsave + nsave + m];
+		      fabz_t = array[inda][ i*nsave + 2*nsave + m] - array[indb][ i*nsave + 2*nsave + m];
+		    }
+		    if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && j >= nvalues_pg)) {
+		      fabx_0 = array[inda*ngroup_glo+indb][ j*nsave + n];
+		      faby_0 = array[inda*ngroup_glo+indb][ j*nsave + nsave + n];
+		      fabz_0 = array[inda*ngroup_glo+indb][ j*nsave + 2*nsave + n];
+		    } else {
+		      fabx_0 = array[inda][ j*nsave + n] - array[indb][ j*nsave + n];
+		      faby_0 = array[inda][ j*nsave + nsave + n] - array[indb][ j*nsave + nsave + n];
+		      fabz_0 = array[inda][ j*nsave + 2*nsave + n] - array[indb][ j*nsave + 2*nsave + n];
+		    }
 		  }
-		  if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && j >= nvalues_pg)) {
-		    fabx_0 = array[inda*ngroup_glo+indb][ j*nsave + n];
-		    faby_0 = array[inda*ngroup_glo+indb][ j*nsave + nsave + n];
-		    fabz_0 = array[inda*ngroup_glo+indb][ j*nsave + 2*nsave + n];
-		  } else {
-		    fabx_0 = array[indb][ j*nsave + n];
-		    faby_0 = array[indb][ j*nsave + nsave + n];
-		    fabz_0 = array[indb][ j*nsave + 2*nsave + n];
-		  }
-		  } else {
-		  if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && i >= nvalues_pg)) {
-		    fabx_t = array[inda*ngroup_glo+indb][ i*nsave + m];
-		    faby_t = array[inda*ngroup_glo+indb][ i*nsave + nsave + m];
-		    fabz_t = array[inda*ngroup_glo+indb][ i*nsave + 2*nsave + m];
-		  } else {
-		    fabx_t = array[inda][ i*nsave + m] - array[indb][ i*nsave + m];
-		    faby_t = array[inda][ i*nsave + nsave + m] - array[indb][ i*nsave + nsave + m];
-		    fabz_t = array[inda][ i*nsave + 2*nsave + m] - array[indb][ i*nsave + 2*nsave + m];
-		  }
-		  if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && j >= nvalues_pg)) {
-		    fabx_0 = array[inda*ngroup_glo+indb][ j*nsave + n];
-		    faby_0 = array[inda*ngroup_glo+indb][ j*nsave + nsave + n];
-		    fabz_0 = array[inda*ngroup_glo+indb][ j*nsave + 2*nsave + n];
-		  } else {
-		    fabx_0 = array[inda][ j*nsave + n] - array[indb][ j*nsave + n];
-		    faby_0 = array[inda][ j*nsave + nsave + n] - array[indb][ j*nsave + nsave + n];
-		    fabz_0 = array[inda][ j*nsave + 2*nsave + n] - array[indb][ j*nsave + 2*nsave + n];
-		  }
-		  }
-		  
 		  // calculate radial component of the forces/velocities (mapped on the distance vector)
-		  fabr_t = (fabx_t*delx_t + faby_t*dely_t +fabz_t*delz_t) / dist;
-		  fabr_0 = (fabx_0*delx_0 + faby_0*dely_0 +fabz_0*delz_0) / dist;
+		  fabr_t = (fabx_t*delx_t + faby_t*dely_t +fabz_t*delz_t) * disti;
+		  fabr_0 = (fabx_0*delx_0 + faby_0*dely_0 +fabz_0*delz_0) * disti;
 		  //delfx_p = frp * delx / rsq;
 		  //delfy_p = frp * dely / rsq;
 		  //delfz_p = frp * delz / rsq;
@@ -1473,16 +1628,14 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 		  //if (m==n) printf("dist: %f, dist_t %f, dist_0 %f\n",dist,dist_t, dist_0);
 		  
 		  ind = dist/range*bins;
-		  ind_t = dist_t/range*bins;
-		  ind_0 = dist_0/range*bins;
+		  //ind_t = dist_t/range*bins;
+		  //ind_0 = dist_0/range*bins;
 		  offset= k*bins+ind;
-		  
 		  if (fluc_flag) {
 		    //printf ("fluc_lower %d, fluc_upper %d\n",fluc_lower, fluc_upper);
-		    if ( fluc_lower <= i +1 && i+1 <= fluc_upper && dist_t < range) fabr_t -= mean_fluc_data[ind_t];
-		    if ( fluc_lower <= j +1 && j+1 <= fluc_upper && dist_0 < range) fabr_0 -= mean_fluc_data[ind_0];
+		    //if ( fluc_lower <= i +1 && i+1 <= fluc_upper && dist_t < range) fabr_t -= mean_fluc_data[ind_t];
+		    //if ( fluc_lower <= j +1 && j+1 <= fluc_upper && dist_0 < range) fabr_0 -= mean_fluc_data[ind_0];
 		  }
-		  
 		  if(i==0&&j==0) local_count[offset]+=1.0;
 		  local_corr[offset][ipair] += fabr_t*fabr_0;
 		  local_corr_err[offset][ipair] += fabr_t*fabr_0*fabr_t*fabr_0;
@@ -1507,12 +1660,17 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 	      m--;
 	      if (m < 0) m = nsave-1;
 	    }
+	      double t2 = MPI_Wtime();
+  time_calc += t2 -t1;
 	  }	
 	}
       }
       ipair++;
     }
   }
+  
+  double t2 = MPI_Wtime();
+  time_total += t2 -t1;
 }
 
 /* ----------------------------------------------------------------------
@@ -1676,10 +1834,52 @@ void FixAveCorrelatePeratom::reset_timestep(bigint ntimestep)
   if (ntimestep > nvalid) error->all(FLERR,"Fix ave/correlate/peratom missed timestep");
 }
 
+/* ----------------------------------------------------------------------
+   copy values within local atom-based arrays
+------------------------------------------------------------------------- */
+
+void FixAveCorrelatePeratom::copy_arrays(int i, int j, int delflag)
+{
+  body[j] = body[i];
+  
+  /*int offset= 0;
+  for (int m= 0; m < nvalues; m++) {
+    for (int k= 0; k < nsample; k++) {
+      array[j][offset] = array[i][offset];
+      offset++;
+    }
+    for (int k= nsample; k < nsave; k++) {
+      array[j][offset++]= 0.0;
+    }
+  }
+  if (variable_flag == VAR_DEPENDENED){
+    for (int k= 0; k < nsample; k++) {
+      variable_store[j][k]=variable_store[i][k];
+    }
+    for (int k= nsample; k < nsave; k++) {
+      variable_store[j][k]=0.0;
+    }
+  } else if (variable_flag == DIST_DEPENDENED){
+    for (int r=0; r<3;r++) {
+      for (int k= 0; k < nsample; k++) {
+	variable_store[j][k+r*nsave]=variable_store[i][k+r*nsave];
+      }
+      for (int k= nsample; k < nsave; k++) {
+	variable_store[j][k+r*nsave]=0.0;
+      }
+    }
+  }*/
+}
+
 /* --------------------------------------------------------------------- */
 
 int FixAveCorrelatePeratom::pack_exchange(int i, double* buf) {
   int offset= 0;
+  if (memory_switch == ATOM) {
+    buf[0] = ubuf(body[i]).d;
+    offset++;
+  }
+  
   for (int m= 0; m < nvalues ; m++) {
     for (int k= 0; k < nsample; k++) {
       buf[offset] = array[i][offset];
@@ -1714,6 +1914,11 @@ int FixAveCorrelatePeratom::pack_exchange(int i, double* buf) {
 
 int FixAveCorrelatePeratom::unpack_exchange(int nlocal, double* buf) {
   int offset= 0;
+  if (memory_switch == ATOM) {
+    body[nlocal] = (int) ubuf(buf[0]).i;
+    offset++;
+  }
+  
   for (int m= 0; m < nvalues ; m++) {
     for (int k= 0; k < nsample; k++) {
       array[nlocal][offset]= buf[offset];
@@ -1764,45 +1969,11 @@ double FixAveCorrelatePeratom::memory_usage() {
 ------------------------------------------------------------------------- */
 
 void FixAveCorrelatePeratom::grow_arrays(int nmax) {
-  memory->grow(array,nmax,(nvalues )*nsave,"fix_ave/correlate/peratom:array");
-  if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED) memory->grow(variable_store,ngroup_glo,nsave*variable_nvalues,"fix_ave/correlate/peratom:variable_store");
+  memory->create(array,nmax,(nvalues )*nsave,"fix_ave/correlate/peratom:array");
+  if (variable_flag == VAR_DEPENDENED || variable_flag == DIST_DEPENDENED) memory->create(variable_store,ngroup_glo,nsave*variable_nvalues,"fix_ave/correlate/peratom:variable_store");
   array_atom = array;
   if (array) vector_atom = array[0];
   else vector_atom = NULL;
-}
-
-/* ----------------------------------------------------------------------
-   copy values within local atom-based array
-------------------------------------------------------------------------- */
-
-void FixAveCorrelatePeratom::copy_arrays(int i, int j, int delflag) {
-  /*int offset= 0;
-  for (int m= 0; m < nvalues; m++) {
-    for (int k= 0; k < nsample; k++) {
-      array[j][offset] = array[i][offset];
-      offset++;
-    }
-    for (int k= nsample; k < nsave; k++) {
-      array[j][offset++]= 0.0;
-    }
-  }
-  if (variable_flag == VAR_DEPENDENED){
-    for (int k= 0; k < nsample; k++) {
-      variable_store[j][k]=variable_store[i][k];
-    }
-    for (int k= nsample; k < nsave; k++) {
-      variable_store[j][k]=0.0;
-    }
-  } else if (variable_flag == DIST_DEPENDENED){
-    for (int r=0; r<3;r++) {
-      for (int k= 0; k < nsample; k++) {
-	variable_store[j][k+r*nsave]=variable_store[i][k+r*nsave];
-      }
-      for (int k= nsample; k < nsave; k++) {
-	variable_store[j][k+r*nsave]=0.0;
-      }
-    }
-  }*/
 }
 
 /* ----------------------------------------------------------------------
@@ -1869,5 +2040,57 @@ void FixAveCorrelatePeratom::restart(char *buf){
 /* sign-function */
 template <typename T> int FixAveCorrelatePeratom::sgn(T val) {
     return (T(0) < val) - (val < T(0));
+}
+
+/* ----------------------------------------------------------------------
+   compute the center-of-mass coords of group of atoms, with body_index index
+   masstotal = total mass
+   return center-of-mass coords in cm[]
+   must unwrap atoms to compute center-of-mass correctly
+------------------------------------------------------------------------- */
+
+void FixAveCorrelatePeratom::xcm(int index, double masstotal, double *cm)
+{
+
+  double **x = atom->x;
+  int *mask = atom->mask;
+  int *type = atom->type;
+  imageint *image = atom->image;
+  double *mass = atom->mass;
+  double *rmass = atom->rmass;
+  int nlocal = atom->nlocal;
+
+  double cmone[3];
+  cmone[0] = cmone[1] = cmone[2] = 0.0;
+
+  double massone;
+  double unwrap[3];
+
+  if (rmass) {
+    for (int i = 0; i < nlocal; i++)
+      if (body[i] == index) {
+        massone = rmass[i];
+        domain->unmap(x[i],image[i],unwrap);
+        cmone[0] += unwrap[0] * massone;
+        cmone[1] += unwrap[1] * massone;
+        cmone[2] += unwrap[2] * massone;
+      }
+  } else {
+    for (int i = 0; i < nlocal; i++)
+      if (body[i] == index) {
+        massone = mass[type[i]];
+        domain->unmap(x[i],image[i],unwrap);
+        cmone[0] += unwrap[0] * massone;
+        cmone[1] += unwrap[1] * massone;
+        cmone[2] += unwrap[2] * massone;
+      }
+  }
+
+  MPI_Allreduce(cmone,cm,3,MPI_DOUBLE,MPI_SUM,world);
+  if (masstotal > 0.0) {
+    cm[0] /= masstotal;
+    cm[1] /= masstotal;
+    cm[2] /= masstotal;
+  }
 }
 

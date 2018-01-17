@@ -87,6 +87,10 @@ class FixGLEPair : public Fix {
   double time_dist_update;
   double time_int_rel2;
   
+  // sqrt_matrix
+  int mLanczos;
+  double tolLanczos;
+  
   void read_input();
   void update_noise();
   void compute_step(int w, int* dist_pair_list, double **dr_pair_list, double* input, double* output);

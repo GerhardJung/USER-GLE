@@ -37,10 +37,10 @@ class FixAveCorrelatePeratom : public Fix {
   double compute_array(int,int);
   void reset_timestep(bigint);
   double memory_usage();
+  void copy_arrays(int i, int j, int delflag);
   int pack_exchange(int, double *);
   int unpack_exchange(int, double *);
   void grow_arrays(int);
-  void copy_arrays(int, int, int);
   
   void write_restart(FILE *);
   void restart(char *);
@@ -60,7 +60,15 @@ class FixAveCorrelatePeratom : public Fix {
   int cross_flag;
   double prefactor;
   
+  //for switch group
   int *cor_groupbit, *cor_valbit, *cor_group;
+  
+  // for switch atom
+  int *body;                // which body each atom is part of (-1 if none)
+  int *mol2body;            // convert mol-ID to rigid body index
+  int *body2mol;            // convert rigid body index to mol-ID
+  int maxmol;               // size of mol2body = max mol-ID
+  int nbody;                // # of rigid bodies
   
   int variable_nvalues;		//for variable dependence of the correlation
   int variable_value2index;
@@ -121,7 +129,9 @@ class FixAveCorrelatePeratom : public Fix {
   double time_calc_mean;
   double time_total; 
   
+  void xcm(int, double, double*);
   template <typename T> int sgn(T val);
+  
 };
 
 }

@@ -125,6 +125,8 @@ FixCondiff::~FixCondiff()
     memory->destroy(density_brick_force_x);
     memory->destroy(density_brick_force_y);
     memory->destroy(density_brick_force_z);
+    
+    delete random;
 }
 
 //Where algorithm steps in
@@ -220,6 +222,17 @@ void FixCondiff::assign_vf()
     int* mask = atom->mask;
         int* tag = atom->tag;
 
+
+	double *force_tot = new double[3];
+	force_tot[0] = 0.0;
+	force_tot[1] = 0.0;
+	force_tot[2] = 0.0;
+	
+	double *force_tot2 = new double[3];
+	force_tot2[0] = 0.0;
+	force_tot2[1] = 0.0;
+	force_tot2[2] = 0.0;
+	
     for (int i = 0; i < nlocal; i++) {
 
         //Take velocity of dpd-particles and map them on grid
@@ -253,6 +266,10 @@ void FixCondiff::assign_vf()
 
         //Take force of condiff-particles and map them on grid
         if (mask[i] & groupbit_condiff) {
+	  force_tot[0] += f[i][0];
+	  force_tot[1] += f[i][1];
+	  force_tot[2] += f[i][2];
+	  //printf("force_tot_q %f %f %f \n",force_tot[0],force_tot[1],force_tot[2]);
             nx = static_cast<int>((x[i][0] - boxlo[0]) * delxinv + shift) - OFFSET;
             ny = static_cast<int>((x[i][1] - boxlo[1]) * delyinv + shift) - OFFSET;
             nz = static_cast<int>((x[i][2] - boxlo[2]) * delzinv + shift) - OFFSET;
@@ -274,15 +291,28 @@ void FixCondiff::assign_vf()
                         density_brick_force_x[mz][my][mx] += x0 * rho1d[0][l] * f[i][0];
                         density_brick_force_y[mz][my][mx] += x0 * rho1d[0][l] * f[i][1];
                         density_brick_force_z[mz][my][mx] += x0 * rho1d[0][l] * f[i][2];
+			force_tot2[0] +=  x0 * rho1d[0][l] * f[i][0];
+			force_tot2[1] += x0 * rho1d[0][l] * f[i][1];
+			force_tot2[2] += x0 * rho1d[0][l] * f[i][2];
                     }
                 }
             }
         }
     }
+
+    //printf("force_tot_q %f %f %f \n",force_tot[0],force_tot[1],force_tot[2]);
+    //printf("force_tot_m %f %f %f \n",force_tot2[0],force_tot2[1],force_tot2[2]);
+    
+    delete [] force_tot;
+    delete [] force_tot2;
 }
 
 void FixCondiff::reassign_vf()
 {
+  double *force_tot = new double[3];
+	force_tot[0] = 0.0;
+	force_tot[1] = 0.0;
+	force_tot[2] = 0.0;
 
     int l, m, n, nx, ny, nz, mx, my, mz;
     FFT_SCALAR dx, dy, dz, x0, y0, z0;
@@ -322,10 +352,14 @@ void FixCondiff::reassign_vf()
                         x0 = y0 * rho1d[0][l];
 			// cutoff to prohibit float errors in the normalization
                         if (density_brick_counter_x[mz][my][mx]*density_brick_counter_x[mz][my][mx]>=0.0000000000000001) { 
-                            v[i][0] += (density_brick_velocity_x[mz][my][mx] * x0 / density_brick_counter_x[mz][my][mx]);
-                            v[i][1] += (density_brick_velocity_y[mz][my][mx] * x0 / density_brick_counter_x[mz][my][mx]);
-                            v[i][2] += (density_brick_velocity_z[mz][my][mx] * x0 / density_brick_counter_x[mz][my][mx]);
-                        }
+                          v[i][0] += (density_brick_velocity_x[mz][my][mx] * x0 / density_brick_counter_x[mz][my][mx]);
+                          v[i][1] += (density_brick_velocity_y[mz][my][mx] * x0 / density_brick_counter_x[mz][my][mx]);
+                          v[i][2] += (density_brick_velocity_z[mz][my][mx] * x0 / density_brick_counter_x[mz][my][mx]);
+                        } else {
+			  if (density_brick_force_x[mz][my][mx]*density_brick_force_x[mz][my][mx] >= 0.000001 || density_brick_force_y[mz][my][mx]*density_brick_force_y[mz][my][mx] >= 0.000001 || density_brick_force_z[mz][my][mx]*density_brick_force_z[mz][my][mx] >= 0.000001) {
+			    //printf("Empty grid-point (%d %d %d) lost force (%f %f %f) in fix/condiff -> will break momentum conservation\n",mz,my,mx,density_brick_force_x[mz][my][mx] ,density_brick_force_y[mz][my][mx] ,density_brick_force_z[mz][my][mx]);
+			  }
+			}
                     }
                 }
             }
@@ -351,16 +385,22 @@ void FixCondiff::reassign_vf()
                     for (l = nlower; l <= nupper; l++) {
                         mx = l + nx;
                         x0 = y0 * rho1d[0][l];
-                        if (density_brick_counter_x[mz][my][mx] != 0) {
+                        if (density_brick_counter_x[mz][my][mx]*density_brick_counter_x[mz][my][mx]>=0.0000000000000001) { 
                             f[i][0] += density_brick_force_x[mz][my][mx] * x0 / density_brick_counter_x[mz][my][mx];
                             f[i][1] += density_brick_force_y[mz][my][mx] * x0 / density_brick_counter_x[mz][my][mx];
                             f[i][2] += density_brick_force_z[mz][my][mx] * x0 / density_brick_counter_x[mz][my][mx];
-                        }
+			    force_tot[0] += density_brick_force_x[mz][my][mx] * x0 / density_brick_counter_x[mz][my][mx];
+			    force_tot[1] += density_brick_force_y[mz][my][mx] * x0 / density_brick_counter_x[mz][my][mx];
+			    force_tot[2] += density_brick_force_z[mz][my][mx] * x0 / density_brick_counter_x[mz][my][mx];
+			    //printf("force_tot_s %d %f %f %f %f\n",i,force_tot[0],force_tot[1],force_tot[2],density_brick_counter_x[mz][my][mx]);
+			}
                     }
                 }
             }
         }
     }
+        //printf("force_tot_s %f %f %f \n",force_tot[0],force_tot[1],force_tot[2]);
+        delete [] force_tot;
 }
 
 void FixCondiff::euler_step()

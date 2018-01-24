@@ -70,7 +70,7 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
   global_freq = 1;
   nevery = 1;
   peratom_freq = 1;
-  vector_flag = 1;
+  peratom_flag = 1;
   restart_global = 1;
   
   MPI_Comm_rank(world,&me);
@@ -150,7 +150,9 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
   memory->create(fd, atom->nlocal,3, "gle/pair:fd");
   memory->create(fc, atom->nlocal,3, "gle/pair:fc");
   memory->create(fr, atom->nlocal,3, "gle/pair:fr");
-  size_vector = atom->nlocal;
+  memory->create(array, atom->nlocal,9, "gle/pair:array");
+  size_peratom_cols = 9;
+  array_atom = array;
   
   // initialize forces
   for ( i=0; i< nlocal; i++) {
@@ -158,6 +160,9 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
       fc[i][dim1] = 0.0;
       fd[i][dim1] = 0.0;
       fr[i][dim1] = 0.0;
+      array[i][dim1] = 0.0;
+      array[i][3+dim1] = 0.0;
+      array[i][6+dim1] = 0.0;
     }
   }
   
@@ -514,9 +519,12 @@ void FixGLEPair::final_integrate()
   // force equals .... (not yet implemented)
   for ( i=0; i< nlocal; i++) {
     itag = tag[i]-1;
-    f[i][0] = fr[itag][0];
-    f[i][1] = fr[itag][1];
-    f[i][2] = fr[itag][2];
+    for (dim1=0; dim1<d; dim1++) { 
+      f[i][dim1] = fr[itag][dim1];
+      array[i][dim1] = fc[itag][dim1];
+      array[i][3+dim1] = fd[itag][dim1];
+      array[i][6+dim1] = fr[itag][dim1];
+    }
   }
   t2 = MPI_Wtime();
   time_int_rel2 += t2 -t1;

@@ -561,11 +561,11 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
 
   // npair = # of correlation pairs to calculate
   if (type == AUTO || type == CROSS || type == AUTOCROSS) npair = nvalues;
-  if (variable_flag == DIST_DEPENDENED) npair /= 3;
+  if (variable_flag == DIST_DEPENDENED) npair /= 3; // 3 dim -> parallel and orth. contribution (factor = 2!)
   if (type == AUTOUPPER) npair = nvalues*(nvalues+1)/2;
   if (type == UPPERCROSS) npair = nvalues/3*(nvalues/3+1)/2;
   if (type == FULL) npair = nvalues*nvalues;
-  //printf("npair %d\n",npair);
+  printf("npair %d\n",npair);
   // print file comment lines
   if (fp && me == 0) {
     if (title1) fprintf(fp,"%s\n",title1);
@@ -1389,7 +1389,7 @@ void FixAveCorrelatePeratom::end_of_step()
 	if (save_count[i]) {
 	  for (j = 0; j < npair; j++) {
 	    //if (save_corr[i][j]*save_corr[i][j]/save_count[i]/save_count[i] < 0.00000000001) printf("i %d, j %d, save_corr[i][j] %f save_count[i] %f\n",i,j,save_corr[i][j],save_count[i]);
-	    fprintf(fp," %.15lg %g",prefactor*save_corr[i][j]/save_count[i],prefactor*save_corr_err[i][j]/save_count[i]);
+	    fprintf(fp," %.8lg %g",prefactor*save_corr[i][j]/save_count[i],prefactor*save_corr_err[i][j]/save_count[i]);
 	  }
 	} else {
 	  for (j = 0; j < npair; j++)
@@ -1399,12 +1399,12 @@ void FixAveCorrelatePeratom::end_of_step()
 	  int offset = i + corr_length/2;
 	  if (type == AUTOCROSS)
 	    fprintf(fp," %lf",save_count[offset]);
-	  if (save_count[offset]) {
+	  if (save_count[i]) {
 	    for (j = 0; j < npair; j++)
-	      fprintf(fp," %.15lg %g",prefactor*save_corr[offset][j]/save_count[offset],prefactor*save_corr_err[offset][j]/save_count[offset]);
+	      fprintf(fp," %.15lg %g",prefactor*save_corr[offset][j]/save_count[i],prefactor*save_corr_err[offset][j]/save_count[i]);
 	  } else {
 	  for (j = 0; j < npair; j++)
-	    fprintf(fp," 0.0");
+	    fprintf(fp," 0.0 0.0");
 	  }
 	}
 	fprintf(fp,"\n");
@@ -1495,7 +1495,7 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
   
   double delx, dely, delz, delx_t, dely_t,delz_t, delx_0, dely_0, delz_0;
   double fabx_t, faby_t, fabz_t,fabx_0, faby_0, fabz_0;
-  double rsq, dist, dist_t, dist_0, fabr_t,fabr_0;
+  double rsq, dist, dist_t, dist_0, fabr_t,fabr_0,fabox_t0,faboy_t0,faboz_t0;
 
   //calculate work distribution
   int sample_start = 0,
@@ -1520,7 +1520,7 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
  
   double t1 = MPI_Wtime();
   #if defined (_OPENMP)
-  #pragma omp parallel private(a,b,ipair,k,m,ind,offset,i,j,delx,dely,delz,rsq,dist,delx_t,dely_t,delz_t,dist_t,delx_0,dely_0,delz_0,dist_0,fabx_t,faby_t,fabz_t,fabx_0,faby_0,fabz_0,fabr_0,fabr_t,ind_t,ind_0) default(none) shared(n,sample_stop, sample_start,indices_group,incr_nvalues) 
+  #pragma omp parallel private(a,b,ipair,k,m,ind,offset,i,j,delx,dely,delz,rsq,dist,delx_t,dely_t,delz_t,dist_t,delx_0,dely_0,delz_0,dist_0,fabx_t,faby_t,fabz_t,fabx_0,faby_0,fabz_0,fabr_0,fabr_t,fabox_t0,faboy_t0,faboz_t0,ind_t,ind_0) default(none) shared(n,sample_stop, sample_start,indices_group,incr_nvalues) 
   #endif
   {
     ipair = 0;
@@ -1615,11 +1615,13 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 		  delz_t = variable_store[inda][m+2*nsave]- variable_store[indb][m+2*nsave];
 		  domain->minimum_image(delx_t,dely_t,delz_t);
 		  dist_t = sqrt(delx_t*delx_t + dely_t*dely_t + delz_t*delz_t);
+		  double disti_t = 1.0/dist_t;
 		  delx_0 = variable_store[inda][n] -variable_store[indb][n];
 		  dely_0 = variable_store[inda][n+nsave]-variable_store[indb][n+nsave]  ;
 		  delz_0 = variable_store[inda][n+2*nsave]- variable_store[indb][n+2*nsave];
 		  domain->minimum_image(delx_0,dely_0,delz_0);
 		  dist_0 = sqrt(delx_0*delx_0 + dely_0*dely_0 + delz_0*delz_0);
+		  double disti_0 = 1.0/dist_0;
 		  //printf("%f %f %f\n",delx_0,delx_t,delx);
 		  if (cross_flag ==0) {
 		    if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && i >= nvalues_pg)) {
@@ -1660,21 +1662,15 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 		      fabz_0 = array[inda][ j*nsave + 2*nsave + n] - array[indb][ j*nsave + 2*nsave + n];
 		    }
 		  }
-		  //printf("%f %f %f\n",delx_0,delx_t,delx);
-		  // calculate radial component of the forces/velocities (mapped on the distance vector)
-		  fabr_t = (fabx_t*delx_t + faby_t*dely_t +fabz_t*delz_t) * disti;
-		  fabr_0 = (fabx_0*delx_0 + faby_0*dely_0 +fabz_0*delz_0) * disti;
-		  //delfx_p = frp * delx / rsq;
-		  //delfy_p = frp * dely / rsq;
-		  //delfz_p = frp * delz / rsq;
-		  
-		  //printf("dist %f fabr_t %f fabx_t %f delx_t %f\n",dist,fabr_t, fabx_t, delx_t);
-		  
-		  //if (m==n) printf("dist: %f, dist_t %f, dist_0 %f\n",dist,dist_t, dist_0);
+		  // calculate radial component of the correlated quantity (mapped on the distance vector)
+		  fabr_t = (fabx_t*delx_t + faby_t*dely_t +fabz_t*delz_t) * disti_t;
+		  fabr_0 = (fabx_0*delx_0 + faby_0*dely_0 +fabz_0*delz_0) * disti_0;
+		  // calculate orthogonal component of the correlated quantity (mapped on the distance vector)
+		  fabox_t0 = (fabx_t-fabr_t*delx_t*disti_t)*(fabx_0-fabr_0*delx_0*disti_0);
+		  faboy_t0 = (faby_t-fabr_t*dely_t*disti_t)*(faby_0-fabr_0*dely_0*disti_0);
+		  faboz_t0 = (fabz_t-fabr_t*delz_t*disti_t)*(fabz_0-fabr_0*delz_0*disti_0);
 		  
 		  ind = dist/range*bins;
-		  //ind_t = dist_t/range*bins;
-		  //ind_0 = dist_0/range*bins;
 		  offset= k*bins+ind;
 		  if (fluc_flag) {
 		    //printf ("fluc_lower %d, fluc_upper %d\n",fluc_lower, fluc_upper);
@@ -1682,9 +1678,14 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 		    //if ( fluc_lower <= j +1 && j+1 <= fluc_upper && dist_0 < range) fabr_0 -= mean_fluc_data[ind_0];
 		  }
 		  if(i==0&&j==0) local_count[offset]+=1.0;
+		  // parallel contribution
 		  local_corr[offset][ipair] += fabr_t*fabr_0;
 		  //if (fabr_t*fabr_0*fabr_t*fabr_0 < 0.0000000000001) printf("%d %d,offset %d, local_count[offset] %f,fabr_t %f, fabr_0 %f, delx_t %f,dely_t %f,delz_t %f,delx_0 %f,dely_0 %f,delz_0 %f,delx %f,dely %f,delz %f\n",n,m,offset,local_count[offset],fabr_t, fabr_0,delx_t,dely_t,delz_t,delx_0,dely_0,delz_0,delx,dely,delz);
 		  local_corr_err[offset][ipair] += fabr_t*fabr_0*fabr_t*fabr_0;
+		  // orthogonal contribution
+		  local_corr[offset+corr_length/2][ipair] += fabox_t0+faboy_t0+faboz_t0;
+		  //if (fabr_t*fabr_0*fabr_t*fabr_0 < 0.0000000000001) printf("%d %d,offset %d, local_count[offset] %f,fabr_t %f, fabr_0 %f, delx_t %f,dely_t %f,delz_t %f,delx_0 %f,dely_0 %f,delz_0 %f,delx %f,dely %f,delz %f\n",n,m,offset,local_count[offset],fabr_t, fabr_0,delx_t,dely_t,delz_t,delx_0,dely_0,delz_0,delx,dely,delz);
+		  local_corr_err[offset+corr_length/2][ipair] += (fabox_t0+faboy_t0+faboz_t0)*(fabox_t0+faboy_t0+faboz_t0);
 		}
 	      } else { //no variable dependency
 		// since atoms are renamed, you have to access tag[i]

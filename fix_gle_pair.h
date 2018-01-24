@@ -67,6 +67,7 @@ class FixGLEPair : public Fix {
   double **x_save;
   int lastindexN,lastindexn;
   double **fc;
+  double **array;
 
   class RanMars *random;
   

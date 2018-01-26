@@ -46,6 +46,7 @@ enum{ONE,RUNNING};
 enum{AUTO,CROSS,AUTOCROSS,AUTOUPPER, UPPERCROSS, FULL};
 enum{PERATOM,PERGROUP, PERPAIR, PERGROUP_PERPAIR, GROUP,ATOM};
 enum{NOT_DEPENDENED,VAR_DEPENDENED,DIST_DEPENDENED};
+enum{SELFCOR,CROSSCOR,DIFFCOR};
 
 #define INVOKED_SCALAR 1
 #define INVOKED_VECTOR 2
@@ -131,7 +132,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   variable_nvalues = 0;
   overwrite = 0;
   v_counter = 0;
-  cross_flag = 0;
+  cross_flag = CROSS;
   char *title1 = NULL;
   char *title2 = NULL;
   char *title3 = NULL;
@@ -144,7 +145,10 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
       else if (strcmp(arg[iarg+1],"cross") == 0){
 	if (iarg+3 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
 	type = CROSS;
-	cross_flag = force->inumeric(FLERR,arg[iarg+2]);
+	if (strcmp(arg[iarg+2],"cross_correlate") == 0 || strcmp(arg[iarg+2],"0") == 0) cross_flag = CROSSCOR;
+	else if (strcmp(arg[iarg+2],"self_correlate") == 0) cross_flag = SELFCOR;
+	else if (strcmp(arg[iarg+2],"self_correlate") == 0) cross_flag = DIFFCOR;
+	else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
 	iarg += 1;
       }
       else if (strcmp(arg[iarg+1],"auto/upper") == 0) type = AUTOUPPER;
@@ -1478,7 +1482,7 @@ void FixAveCorrelatePeratom::end_of_step()
   //printf("processor %d: time(reduce_write_global) = %f\n",me,reduce_write_global);
   //printf("processor %d: time(calc) = %f\n",me,time_calc);
   //printf("processor %d: time(red_calc) = %f\n",me,time_calc_mean);
-  //printf("processor %d: time(total) = %f\n",me,time_total);
+  printf("processor %d: time(total) = %f\n",me,time_total);
 }
 
 /* ----------------------------------------------------------------------
@@ -1623,7 +1627,7 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 		  dist_0 = sqrt(delx_0*delx_0 + dely_0*dely_0 + delz_0*delz_0);
 		  double disti_0 = 1.0/dist_0;
 		  //printf("%f %f %f\n",delx_0,delx_t,delx);
-		  if (cross_flag ==0) {
+		  if (cross_flag ==CROSSCOR) {
 		    if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && i >= nvalues_pg)) {
 		      fabx_t = array[inda*ngroup_glo+indb][ i*nsave + m];
 		      faby_t = array[inda*ngroup_glo+indb][ i*nsave + nsave + m];
@@ -1642,7 +1646,7 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 		      faby_0 = array[indb][ j*nsave + nsave + n];
 		      fabz_0 = array[indb][ j*nsave + 2*nsave + n];
 		    }
-		    } else {
+		    } else if(cross_flag == DIFFCOR) {
 		    if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && i >= nvalues_pg)) {
 		      fabx_t = array[inda*ngroup_glo+indb][ i*nsave + m];
 		      faby_t = array[inda*ngroup_glo+indb][ i*nsave + nsave + m];
@@ -1661,7 +1665,27 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 		      faby_0 = array[inda][ j*nsave + nsave + n] - array[indb][ j*nsave + nsave + n];
 		      fabz_0 = array[inda][ j*nsave + 2*nsave + n] - array[indb][ j*nsave + 2*nsave + n];
 		    }
+		  } else if(cross_flag == SELFCOR) {
+		    if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && i >= nvalues_pg)) {
+		      fabx_t = array[inda*ngroup_glo+indb][ i*nsave + m];
+		      faby_t = array[inda*ngroup_glo+indb][ i*nsave + nsave + m];
+		      fabz_t = array[inda*ngroup_glo+indb][ i*nsave + 2*nsave + m];
+		    } else {
+		      fabx_t = array[inda][ i*nsave + m];
+		      faby_t = array[inda][ i*nsave + nsave + m];
+		      fabz_t = array[inda][ i*nsave + 2*nsave + m];
+		    }
+		    if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && j >= nvalues_pg)) {
+		      fabx_0 = array[inda*ngroup_glo+indb][ j*nsave + n];
+		      faby_0 = array[inda*ngroup_glo+indb][ j*nsave + nsave + n];
+		      fabz_0 = array[inda*ngroup_glo+indb][ j*nsave + 2*nsave + n];
+		    } else {
+		      fabx_0 = array[inda][ j*nsave + n];
+		      faby_0 = array[inda][ j*nsave + nsave + n];
+		      fabz_0 = array[inda][ j*nsave + 2*nsave + n];
+		    }
 		  }
+		  
 		  // calculate radial component of the correlated quantity (mapped on the distance vector)
 		  fabr_t = (fabx_t*delx_t + faby_t*dely_t +fabz_t*delz_t) * disti_t;
 		  fabr_0 = (fabx_0*delx_0 + faby_0*dely_0 +fabz_0*delz_0) * disti_0;

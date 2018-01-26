@@ -55,8 +55,10 @@ class FixGLEPair : public Fix {
   int Nt;
   double *self_data;
   double *cross_data;
+  double *self_data_dist;
   double *self_data_ft;
   double *cross_data_ft;
+  double *self_data_dist_ft;
   
   // system constants and data
   int d;
@@ -83,10 +85,12 @@ class FixGLEPair : public Fix {
   double time_noise;
   double time_matrix_create;
   double time_forwardft;
+  double time_forwardft_prep;
   double time_sqrt;
   double time_backwardft;
   double time_dist_update;
   double time_int_rel2;
+  int k_tot;
   
   // sqrt_matrix
   int mLanczos;

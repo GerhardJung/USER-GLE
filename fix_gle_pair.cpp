@@ -116,10 +116,12 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
   time_noise = 0.0;
   time_matrix_create = 0.0;
   time_forwardft = 0.0;
+  time_forwardft_prep = 0.0;
   time_sqrt = 0.0;
   time_backwardft = 0.0;
   time_dist_update = 0.0;
   time_int_rel2 = 0.0;
+  k_tot = 0;
   
   // read input file
   t1 = MPI_Wtime();
@@ -210,11 +212,14 @@ FixGLEPair::~FixGLEPair()
   memory->destroy(fc);
   memory->destroy(fd);
   memory->destroy(fr);
+  memory->destroy(array);
   
   delete [] cross_data;
   delete [] self_data;
+  delete [] self_data_dist;
   delete [] cross_data_ft;
   delete [] self_data_ft;
+  delete [] self_data_dist_ft;
 
 }
 
@@ -268,8 +273,8 @@ void FixGLEPair::init()
   int N = 2*Nt -2;
   kiss_fft_scalar * buf;
   kiss_fft_cpx * bufout;
-  buf=(kiss_fft_scalar*)KISS_FFT_MALLOC(sizeof(kiss_fft_scalar)*N*(1+Nd));
-  bufout=(kiss_fft_cpx*)KISS_FFT_MALLOC(sizeof(kiss_fft_cpx)*N*(1+Nd));
+  buf=(kiss_fft_scalar*)KISS_FFT_MALLOC(sizeof(kiss_fft_scalar)*N*(1+2*Nd));
+  bufout=(kiss_fft_cpx*)KISS_FFT_MALLOC(sizeof(kiss_fft_cpx)*N*(1+2*Nd));
   memset(bufout,0,sizeof(kiss_fft_cpx)*N*(1+Nd));
   for (t=0; t<Nt; t++) {
     buf[t] = self_data[t];
@@ -280,16 +285,18 @@ void FixGLEPair::init()
   }
   for (l=0; l< Nd; l++) {
     for (t=0; t<Nt; t++) {
-      buf[N*(l+1)+t] = cross_data[Nt*l+t];
+      buf[N*(2*l+1)+t] = cross_data[Nt*l+t];
+      buf[N*(2*l+2)+t] = self_data_dist[Nt*l+t];
       if (t==0 || t==Nt-1){ }
       else {
-	buf[N*(l+1)+N-t] = cross_data[Nt*l+t];
+	buf[N*(2*l+1)+N-t] = cross_data[Nt*l+t];
+	buf[N*(2*l+2)+N-t] = self_data_dist[Nt*l+t];
       }
     }
   }
   
   kiss_fftr_cfg st = kiss_fftr_alloc( N ,0 ,0,0);
-  for (i=0; i<1+Nd;i++) {
+  for (i=0; i<1+2*Nd;i++) {
     kiss_fftr( st ,&buf[i*N],&bufout[i*N] );
   }
   
@@ -298,8 +305,10 @@ void FixGLEPair::init()
   }
   for (l=0; l< Nd; l++) {
     for (t=0; t<Nt; t++) {
-      cross_data_ft[Nt*l+t] = bufout[N*(l+1)+t].r;
-      if (cross_data_ft[Nt*l+t]*cross_data_ft[Nt*l+t] < 0.000000001) cross_data_ft[Nt*l+t] = sqrt(0.000000001);
+      cross_data_ft[Nt*l+t] = bufout[N*(2*l+1)+t].r;
+      //if (cross_data_ft[Nt*l+t]*cross_data_ft[Nt*l+t] < 0.0) cross_data_ft[Nt*l+t] = 0.0;
+      self_data_dist_ft[Nt*l+t] = bufout[N*(2*l+2)+t].r;
+      //if (self_data_dist_ft[Nt*l+t]*self_data_dist_ft[Nt*l+t] < 0.0) self_data_dist_ft[Nt*l+t] = 0.0;
     }
   }
   free(st);
@@ -374,6 +383,7 @@ void FixGLEPair::initial_integrate(int vflag)
     double *dr = new double[3];
     int ifrom, ito, tid;
     loop_setup_thr(ifrom, ito, tid, inum, nthreads);
+    //printf("%d %d\n",ifrom,ito);
     for (ii = ifrom; ii < ito; ii++) {
       const int i = ilist[ii];
       const int itype = type[i];
@@ -384,7 +394,7 @@ void FixGLEPair::initial_integrate(int vflag)
       ytmp = x[i][1];
       ztmp = x[i][2];
       jnum = numneigh[i];
-      // self-correlation contribution
+      // self-correlation contribution (without distance-dependent contribution)
       for (dim1=0; dim1<d;dim1++) {
 	n = lastindexn;
 	m = lastindexn-1;
@@ -411,6 +421,7 @@ void FixGLEPair::initial_integrate(int vflag)
 	rsq = dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2];
 	rsqi = 1/rsq;
 	int dist = (sqrt(rsq) - dStart)/dStep;
+	double ri = sqrt(rsqi);
 	      
 	if (dist < 0) {
 	  printf("dist: %f, lower cutoff: %f\n",sqrt(rsq),dStart);
@@ -421,8 +432,12 @@ void FixGLEPair::initial_integrate(int vflag)
 	  if (m==-1) m=Nt-1;
 	  for (t = 1; t < Nt; t++) {
 	    dot = (dr[0]*(x_save[3*jtag][n]-x_save[3*jtag][m]) + dr[1]*(x_save[3*jtag+1][n]-x_save[3*jtag+1][m])+dr[2]*(x_save[3*jtag+2][n]-x_save[3*jtag+2][m]))*rsqi;
+	    double dot_self = (dr[0]*(x_save[3*itag][n]-x_save[3*itag][m]) + dr[1]*(x_save[3*itag+1][n]-x_save[3*itag+1][m])+dr[2]*(x_save[3*itag+2][n]-x_save[3*itag+2][m]))*rsqi;
 	    for (dim1=0; dim1<d; dim1++) {
 	      fd[itag][dim1] += cross_data[dist*Nt+t]*dot*dr[dim1];
+	      // distance-dependent contribution of the self-correlation
+	      fd[itag][dim1] += self_data_dist[dist*Nt+t]*dot_self*dr[dim1];
+	      //printf("%f %f %f\n",self_data_dist[dist*Nt+t],dot_self,dr[dim1]);
 	    }
 	    n--;
 	    m--;
@@ -516,11 +531,11 @@ void FixGLEPair::final_integrate()
     fc[itag][2] = f[i][2];
   }
 
-  // force equals .... (not yet implemented)
+  // set force and array (only for evaluation purpose)
   for ( i=0; i< nlocal; i++) {
     itag = tag[i]-1;
     for (dim1=0; dim1<d; dim1++) { 
-      f[i][dim1] = fr[itag][dim1];
+      f[i][dim1] = fr[itag][dim1]/update->dt+fd[itag][dim1]/update->dt + fc[itag][dim1];
       array[i][dim1] = fc[itag][dim1];
       array[i][3+dim1] = fd[itag][dim1];
       array[i][6+dim1] = fr[itag][dim1];
@@ -536,6 +551,7 @@ void FixGLEPair::final_integrate()
     printf("processor %d: time(int_rel1) = %f\n",me,time_int_rel1);
     printf("processor %d: time(noise) = %f\n",me,time_noise);
     printf("processor %d: time(matrix_create) = %f\n",me,time_matrix_create);
+     printf("processor %d: time(forwardft_prep) = %f\n",me,time_forwardft_prep);
     printf("processor %d: time(forwardft) = %f\n",me,time_forwardft);
     printf("processor %d: time(sqrt) = %f\n",me,time_sqrt);
     printf("processor %d: time(backwardft) = %f\n",me,time_backwardft);
@@ -703,12 +719,14 @@ void FixGLEPair::read_input()
     
   // initilize simulations for either TIME input (fitting necessary) or FIT input (only reading necessary)
   int l,t,i;
-  double dummy_d, dummy_t,mem;
+  double dummy_d, dummy_t,mem,mem_self;
   
   self_data = new double[Nt];
   cross_data = new double[Nt*Nd];
+  self_data_dist = new double[Nt*Nd];
   self_data_ft = new double[Nt];
   cross_data_ft = new double[Nt*Nd];
+  self_data_dist_ft = new double[Nt*Nd];
   double *time = new double[Nt];
   
   //read self_memory
@@ -721,8 +739,9 @@ void FixGLEPair::read_input()
   // read cross_memory
   for (l=0; l< Nd; l++) {
     for (t=0; t<Nt; t++) {
-      fscanf(input,"%lf %lf %lf\n",&dummy_d, &dummy_t, &mem);
+      fscanf(input,"%lf %lf %lf %lf\n",&dummy_d, &dummy_t, &mem, &mem_self);
       cross_data[Nt*l+t] = mem*update->dt;
+      self_data_dist[Nt*l+t] = mem_self*update->dt;
     }
   }
   delete [] time;
@@ -815,25 +834,45 @@ void FixGLEPair::update_noise()
   kiss_fft_cpx * bufout;
   buf=(kiss_fft_scalar*)KISS_FFT_MALLOC(sizeof(kiss_fft_scalar)*size*N);
   bufout=(kiss_fft_cpx*)KISS_FFT_MALLOC(sizeof(kiss_fft_cpx)*size*N);
+  memset(buf,0,sizeof(kiss_fft_scalar)*size*N);
   memset(bufout,0,sizeof(kiss_fft_cpx)*size*N);
-  int n = lastindexN,ind;
-  for (t = 0; t < N; t++) {
-    ind = Nt-1+t;
-    if (ind >= N) ind -= N;
-    for (i=0; i<size;i++) {
-      buf[i*N+ind]=ran[n][i];
-    }
-    n--;
-    if (n==-1) n=2*Nt-3;
-  }  
+  int n = lastindexN,ind;  
+  
+  //printf("test\n");
+  //#if defined (_OPENMP)
+  //#pragma omp parallel private(i,t,n,ind) default(none) shared(buf,bufout) 
+  //#endif
+  {
+    n = lastindexN;
+    int ifrom, ito, tid;
+    loop_setup_thr(ifrom, ito, tid, N,comm->nthreads);
+    n -= ifrom;
+    if (n<0) n+=2*Nt-2;
+    //printf("%d %d %d\n",n,ifrom, ito);
+    for (t = 0; t < N; t++) {
+      ind = Nt-1+t;
+      if (ind >= N) ind -= N;
+      for (i=0; i<size;i++) {
+	buf[i*N+ind]=ran[n][i];
+	//printf("%f\n",buf[i*N+ind]);
+      }
+      n--;
+      if (n==-1) n=2*Nt-3;
+    }  
+  }
+  t2 = MPI_Wtime();
+  time_forwardft_prep += t2-t1;
+  
   // FFT evaluation
   
+  t1 = MPI_Wtime();
   #if defined (_OPENMP)
   #pragma omp parallel private(i) default(none) shared(buf,bufout) 
   #endif
   {
     int ifrom, ito, tid;
     loop_setup_thr(ifrom, ito, tid, size,comm->nthreads);
+    
     kiss_fftr_cfg st = kiss_fftr_alloc( N ,0 ,0,0);
     for (i=ifrom; i<ito;i++) {
       kiss_fftr( st ,&buf[i*N],&bufout[i*N] );
@@ -1032,10 +1071,12 @@ void FixGLEPair::update_noise()
 	  if (diff < tolLanczos) {
 	    //printf("proc: %d k: %d\n",omp_get_thread_num(),k);
 	    //work[omp_get_thread_num()]+=k;
+	    k_tot += k;
 	    break;
 	  }
 	}
       }
+      if (k==mLanczos) k_tot += k;
     }
     delete [] alpha;
     delete [] beta;
@@ -1047,6 +1088,9 @@ void FixGLEPair::update_noise()
   }
   
   t2 = MPI_Wtime();
+   if (update->ntimestep %100 == 0) {
+     printf("k_tot %d\n",k_tot);
+   }
   time_sqrt += t2-t1;
   /*for (i=0; i<8; i++) {
     printf("full work proc %d: %d\n",i,work[i]);
@@ -1054,21 +1098,27 @@ void FixGLEPair::update_noise()
   // transform result vector back to time space
   t1 = MPI_Wtime();
 
-
-  for (int i=0; i<nlocal;i++) {
-    itag = tag[i]-1;
-    for (int t = 0; t < Nt; t++) {
-      if (t==0 || t==Nt-1) {
-	fr[itag][0]+= FT_w[t][3*itag+0]/N*sqrt(update->dt);
-	fr[itag][1]+= FT_w[t][3*itag+1]/N*sqrt(update->dt);
-	fr[itag][2]+= FT_w[t][3*itag+2]/N*sqrt(update->dt);
-      } else {
-	fr[itag][0]+= 2*FT_w[t][3*itag+0]/N*sqrt(update->dt);
-	fr[itag][1]+= 2*FT_w[t][3*itag+1]/N*sqrt(update->dt);
-	fr[itag][2]+= 2*FT_w[t][3*itag+2]/N*sqrt(update->dt);
+  #if defined (_OPENMP)
+  #pragma omp parallel private(i,t,itag) default(none) shared(tag,FT_w)
+  #endif
+  {
+    int ifrom, ito, tid;
+    loop_setup_thr(ifrom, ito, tid, nlocal,comm->nthreads);
+    for (int i=ifrom; i<ito;i++) {
+      itag = tag[i]-1;
+      for (int t = 0; t < Nt; t++) {
+	if (t==0 || t==Nt-1) {
+	  fr[itag][0]+= FT_w[t][3*itag+0]/N*sqrt(update->dt);
+	  fr[itag][1]+= FT_w[t][3*itag+1]/N*sqrt(update->dt);
+	  fr[itag][2]+= FT_w[t][3*itag+2]/N*sqrt(update->dt);
+	} else {
+	  fr[itag][0]+= 2*FT_w[t][3*itag+0]/N*sqrt(update->dt);
+	  fr[itag][1]+= 2*FT_w[t][3*itag+1]/N*sqrt(update->dt);
+	  fr[itag][2]+= 2*FT_w[t][3*itag+2]/N*sqrt(update->dt);
+	}
       }
+      //printf(" fr : itag %d  %f %f %f \n",itag,fr[itag][0],fr[itag][1],fr[itag][2]);
     }
-    //printf(" fr : itag %d  %f %f %f \n",itag,fr[itag][0],fr[itag][1],fr[itag][2]);
   }
   
   
@@ -1134,8 +1184,11 @@ void FixGLEPair::compute_step(int w, int* dist_pair_list, double **dr_pair_list,
 	    
       if (dist < Nd) {
 	dot = dr[0]*input[jtag*d]+dr[1]*input[jtag*d+1]+dr[2]*input[jtag*d+2];
+	double dot_self = dr[0]*input[itag*d] + dr[1]*input[itag*d+1]+dr[2]*input[itag*d+2];
 	for (dim1=0; dim1<d;dim1++) {
 	  output[itag*d+dim1] += cross_data_ft[dist*Nt+w]* dot*dr[dim1];
+	  output[itag*d+dim1] += self_data_dist_ft[dist*Nt+w]* dot_self*dr[dim1];
+	  //output[itag*d+dim1] += 0.0000001* dot_self*dr[dim1];
 	}
       }
     }

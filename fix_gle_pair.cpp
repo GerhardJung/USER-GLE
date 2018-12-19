@@ -12,8 +12,7 @@
 ------------------------------------------------------------------------- */
 
 /* ----------------------------------------------------------------------
-   Contributing authors: Stephen Bond (SNL) and
-                         Andrew Baczewski (Michigan State/SNL)
+   Contributing authors: Gerhard Jung (Uni Mainz)
 ------------------------------------------------------------------------- */
 
 
@@ -69,8 +68,8 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
   
   global_freq = 1;
   nevery = 1;
-  peratom_freq = 1;
-  peratom_flag = 1;
+  //peratom_freq = 1;
+//peratom_flag = 1;
   restart_global = 1;
   
   MPI_Comm_rank(world,&me);
@@ -153,8 +152,10 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
   memory->create(fc, atom->nlocal,3, "gle/pair:fc");
   memory->create(fr, atom->nlocal,3, "gle/pair:fr");
   memory->create(array, atom->nlocal,9, "gle/pair:array");
-  size_peratom_cols = 9;
-  array_atom = array;
+  //size_peratom_cols = 9;
+  //array_atom = array;
+  vector_flag = 1;
+    size_vector = atom->nlocal;
   
   // initialize forces
   for ( i=0; i< nlocal; i++) {
@@ -306,9 +307,11 @@ void FixGLEPair::init()
   for (l=0; l< Nd; l++) {
     for (t=0; t<Nt; t++) {
       cross_data_ft[Nt*l+t] = bufout[N*(2*l+1)+t].r;
-      //if (cross_data_ft[Nt*l+t]*cross_data_ft[Nt*l+t] < 0.0) cross_data_ft[Nt*l+t] = 0.0;
+      printf("%d %d %f\n",l,t,cross_data_ft[Nt*l+t]);
+      if (cross_data_ft[Nt*l+t]*cross_data_ft[Nt*l+t] < 0.000000000001) cross_data_ft[Nt*l+t] = sqrt(0.000000000001);
+      printf("%d %d %f\n",l,t,cross_data_ft[Nt*l+t]);
       self_data_dist_ft[Nt*l+t] = bufout[N*(2*l+2)+t].r;
-      //if (self_data_dist_ft[Nt*l+t]*self_data_dist_ft[Nt*l+t] < 0.0) self_data_dist_ft[Nt*l+t] = 0.0;
+      if (self_data_dist_ft[Nt*l+t]*self_data_dist_ft[Nt*l+t] < 0.000000000001) self_data_dist_ft[Nt*l+t] = sqrt(0.000000000001);
     }
   }
   free(st);
@@ -366,7 +369,7 @@ void FixGLEPair::initial_integrate(int vflag)
   const int inum = list->inum;
   
   #if defined(_OPENMP)
-  #pragma omp parallel private (dim1,t,n,m) default(none) shared(x)
+  #pragma omp parallel private (dim1,t,n,m) default(none) shared(x,v)
   #endif
   {
     const int * _noalias const type = atom->type;
@@ -427,6 +430,14 @@ void FixGLEPair::initial_integrate(int vflag)
 	  printf("dist: %f, lower cutoff: %f\n",sqrt(rsq),dStart);
 	  error->all(FLERR,"Particles closer than lower cutoff in fix/pair\n");
 	} else if (dist < Nd) {
+	  dot = (dr[0]*v[j][0] + dr[1]*v[j][1]+dr[2]*v[j][2])*rsqi*update->dt;
+	  double dot_self = (dr[0]*v[i][0] + dr[1]*v[i][1]+dr[2]*v[i][2])*rsqi*update->dt;
+	  // instantaneous contribution, factor 0.5, because K_0 = 0.5*K(0)
+	  for (dim1=0; dim1<d; dim1++) {
+	    fd[itag][dim1] += 0.5*cross_data[dist*Nt]*dot*dr[dim1];
+	    // distance-dependent contribution of the self-correlation
+	    fd[itag][dim1] += 0.5*self_data_dist[dist*Nt]*dot_self*dr[dim1];
+	  }
 	  n = lastindexn;
 	  m = lastindexn-1;
 	  if (m==-1) m=Nt-1;
@@ -444,6 +455,7 @@ void FixGLEPair::initial_integrate(int vflag)
 	    if (n==-1) n=Nt-1;
 	    if (m==-1) m=Nt-1;
 	  }
+	  
 	}
       }
     }
@@ -458,10 +470,10 @@ void FixGLEPair::initial_integrate(int vflag)
       meff = mass[type[i]];   
       //if ( update->ntimestep %10 == 0) { printf("x: %f fc: %f fd: %f fr: %f\n",x[i][0],fc[itag][0],fd[itag][0],fr[itag][0]);}
       for (dim1=0; dim1<d; dim1++) { 
-	x[i][dim1] += int_b * update->dt * v[i][dim1] 
-	  + int_b * update->dt * update->dt / 2.0 / meff * fc[itag][dim1] 
-	  - int_b * update->dt / meff/ 2.0 * fd[itag][dim1]
-	  + int_b*update->dt/ 2.0 / meff * fr[itag][dim1]; // convection, conservative, dissipative, random
+        x[i][dim1] += int_b * update->dt * v[i][dim1] 
+        + int_b * update->dt * update->dt / 2.0 / meff * fc[itag][dim1] 
+        - int_b * update->dt / meff/ 2.0 * fd[itag][dim1]
+      + int_b*update->dt/ 2.0 / meff * fr[itag][dim1]; // convection, conservative, dissipative, random
       }
     }
   }
@@ -515,10 +527,10 @@ void FixGLEPair::final_integrate()
       meff = mass[type[i]];   
       dtfm = dtf / meff;
       for (dim1=0; dim1<d; dim1++) { 
-	v[i][dim1] = int_a * v[i][dim1] 
-	  + update->dt/2.0/meff * (int_a*fc[itag][dim1] + f[i][dim1]) 
-	  - int_b * fd[itag][dim1]/meff 
-	  + int_b*fr[itag][dim1]/meff;
+        v[i][dim1] = int_a * v[i][dim1] 
+        + update->dt/2.0/meff * (int_a*fc[itag][dim1] + f[i][dim1]) 
+        - int_b * fd[itag][dim1]/meff 
+        + int_b*fr[itag][dim1]/meff;
       }
     }
   }
@@ -817,6 +829,7 @@ void FixGLEPair::update_noise()
       r = sqrt(rsq);
       ri = 1.0/r;
       dist = (r - dStart)/dStep;
+      //printf("%d\n",dist);
       dr_pair_list[dist_counter][0]*=ri;
       dr_pair_list[dist_counter][1]*=ri;
       dr_pair_list[dist_counter][2]*=ri;
@@ -891,12 +904,12 @@ void FixGLEPair::update_noise()
     double* FT_w_loc = new double[size]; 
     FT_w.push_back(FT_w_loc);
   }
-  int *work = new int[8];
-  for (i=0; i<8; i++) {
-    work[i]=0;
-  }
+  //int *work = new int[8];
+  //for (i=0; i<8; i++) {
+  //  work[i]=0;
+  //}
 #if defined (_OPENMP)
-#pragma omp parallel for private(t,i,j) default(none) shared(bufout,dr_pair_list,dist_pair_list,FT_w,work) schedule(dynamic)
+#pragma omp parallel for private(t,i,j) default(none) shared(bufout,dr_pair_list,dist_pair_list,FT_w) schedule(dynamic)
 #endif
   for (t=0; t<Nt; t++) {
     std::vector<double *> Vn;
@@ -990,9 +1003,9 @@ void FixGLEPair::update_noise()
 	  for (j=0; j<= k; j++) {
 	    if (d[i] < 0) {
 	      if (warn == 0) {
-		//printf("w %d, iteration %d, eigenvalue %f\n",t,k,d[i]);
+		printf("w %d, iteration %d, eigenvalue %f\n",t,k,d[i]);
 		//error->all(FLERR,"Negative eigenvalue in fix gle/pair decomposition!\n");
-		//error->warning(FLERR,"Negative eigenvalue in fix gle/pair decomposition! Set to zero!\n");
+		error->warning(FLERR,"Negative eigenvalue in fix gle/pair decomposition! Set to zero!\n");
 		warn = 1;
 		d[i] = 0.0;
 	      } else {
@@ -1088,9 +1101,9 @@ void FixGLEPair::update_noise()
   }
   
   t2 = MPI_Wtime();
-   if (update->ntimestep %100 == 0) {
-     printf("k_tot %d\n",k_tot);
-   }
+   //if (update->ntimestep %100 == 0) {
+   //  printf("k_tot %d\n",k_tot);
+   //}
   time_sqrt += t2-t1;
   /*for (i=0; i<8; i++) {
     printf("full work proc %d: %d\n",i,work[i]);

@@ -53,6 +53,8 @@ enum{SELFCOR,CROSSCOR,DIFFCOR};
 #define INVOKED_ARRAY 4
 #define INVOKED_PERATOM 8
 
+//#define TIME_PARA
+
 /* ---------------------------------------------------------------------- */
 
 FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **arg):
@@ -198,6 +200,9 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
 	variable_nvalues = 3;
       } else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
       range = force->numeric(FLERR,arg[iarg+2]);
+      range2 = range*range;
+      range2_cut = (range+1.0)*(range+1.0);
+      // +1.0 so that potential pairs are not neglected. +1.0 is somewhat arbitrary.
       bins = force->inumeric(FLERR,arg[iarg+3]);
       iarg += 4;
     } else if (strcmp(arg[iarg],"switch") == 0) {
@@ -1482,7 +1487,7 @@ void FixAveCorrelatePeratom::end_of_step()
   //printf("processor %d: time(reduce_write_global) = %f\n",me,reduce_write_global);
   //printf("processor %d: time(calc) = %f\n",me,time_calc);
   //printf("processor %d: time(red_calc) = %f\n",me,time_calc_mean);
-  printf("processor %d: time(total) = %f\n",me,time_total);
+  //printf("processor %d: time(total) = %f\n",me,time_total);
 }
 
 /* ----------------------------------------------------------------------
@@ -1523,13 +1528,32 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
   }
  
   double t1 = MPI_Wtime();
-  #if defined (_OPENMP)
-  #pragma omp parallel private(a,b,ipair,k,m,ind,offset,i,j,delx,dely,delz,rsq,dist,delx_t,dely_t,delz_t,dist_t,delx_0,dely_0,delz_0,dist_0,fabx_t,faby_t,fabz_t,fabx_0,faby_0,fabz_0,fabr_0,fabr_t,fabox_t0,faboy_t0,faboz_t0,ind_t,ind_0) default(none) shared(n,sample_stop, sample_start,indices_group,incr_nvalues) 
+  #if defined (_OPENMP) 
+  #pragma omp parallel private(a,b,ipair,k,m,ind,offset,i,j,delx,dely,delz,rsq,dist,delx_t,dely_t,delz_t,dist_t,delx_0,dely_0,delz_0,dist_0,fabx_t,faby_t,fabz_t,fabx_0,faby_0,fabz_0,fabr_0,fabr_t,fabox_t0,faboy_t0,faboz_t0,ind_t,ind_0) default(none) shared(n,sample_stop, sample_start,indices_group,incr_nvalues)
   #endif
   {
     ipair = 0;
+#ifdef TIME_PARA
     int kfrom, kto, tid;
     loop_setup_thr(kfrom, kto, tid, sample_stop - sample_start,comm->nthreads);
+#else 
+    double *omp_local_count;
+    double **omp_local_corr;
+    double **omp_local_corr_err;
+    memory->create(omp_local_count,corr_length,"ave/correlate/peratom:omp_local_count");
+    memory->create(omp_local_corr,corr_length,npair,"ave/correlate/peratom:omp_local_corr");
+    memory->create(omp_local_corr_err,corr_length,npair,"ave/correlate/peratom:omp_local_corr_err");
+    for (i = 0; i < corr_length; i++) {
+      save_count[i] += global_count[i];
+      omp_local_count[i] = 0.0;
+      for (j = 0; j < npair; j++){
+	omp_local_corr[i][j] = 0.0;
+	omp_local_corr_err[i][j] = 0.0;
+      }
+    }
+    int afrom, ato, tid;
+    loop_setup_thr(afrom, ato, tid, ngroup_glo,comm->nthreads);
+#endif
     for (i = 0; i < nvalues; i+=incr_nvalues) {
       //determine whether just autocorrelation or also mixed correlation (different observables)
       double nvalues_upper = i+1;
@@ -1538,7 +1562,7 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
       if (type == FULL) nvalues_lower = 0;
       for (j = nvalues_lower; j < nvalues_upper; j+=incr_nvalues) {
 	//printf("i %d j %d ipair %d\n",i,j,ipair);
-	for (a= 0; a < ngroup_glo; a++) {
+	for (a= afrom; a < ato; a++) {
 	  //determine whether just autocorrelation or also cross correlation (different atoms)
 	  double ngroup_lower = a;
 	  double ngroup_upper = a+1;
@@ -1572,15 +1596,18 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 	      delz = variable_store[inda][n+2*nsave]- variable_store[indb][n+2*nsave];
 	      domain->minimum_image(delx,dely,delz);
 	      rsq = delx*delx + dely*dely + delz*delz;
-	      dist = sqrt (rsq);
-	      if(dist>range) continue;
+	      if(rsq>range2_cut) continue;
 	    }
 	    
 	    // calc correlation
+#ifdef TIME_PARA
 	    m = lastindex - sample_start - kfrom;
 	    if (m < 0) m = nsave+m;
-	    double t1 = MPI_Wtime();
 	    for (k = sample_start+kfrom; k < sample_start+kto; k++) {
+#else
+	    m = lastindex;
+	    for (k = 0; k < nsample; k++) {  
+#endif
 	      if (variable_flag == VAR_DEPENDENED){
 		double dV = variable_store[inda][m] - variable_store[indb][n];
 		dV=fabs(dV);
@@ -1603,9 +1630,9 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 		  }
 		}
 	      } else if (variable_flag == DIST_DEPENDENED) {
-		delx = variable_store[inda][m] -variable_store[indb][n];
-		dely = variable_store[inda][m+nsave]-variable_store[indb][n+nsave]  ;
-		delz = variable_store[inda][m+2*nsave]- variable_store[indb][n+2*nsave];
+		delx = variable_store[inda][n] -variable_store[indb][n];
+		dely = variable_store[inda][n+nsave]-variable_store[indb][n+nsave]  ;
+		delz = variable_store[inda][n+2*nsave]- variable_store[indb][n+2*nsave];
 		domain->minimum_image(delx,dely,delz);
 		rsq = delx*delx + dely*dely + delz*delz;
 		dist = sqrt (rsq);
@@ -1690,26 +1717,32 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 		  fabr_t = (fabx_t*delx_t + faby_t*dely_t +fabz_t*delz_t) * disti_t;
 		  fabr_0 = (fabx_0*delx_0 + faby_0*dely_0 +fabz_0*delz_0) * disti_0;
 		  // calculate orthogonal component of the correlated quantity (mapped on the distance vector)
-		  fabox_t0 = (fabx_t-fabr_t*delx_t*disti_t)*(fabx_0-fabr_0*delx_0*disti_0);
-		  faboy_t0 = (faby_t-fabr_t*dely_t*disti_t)*(faby_0-fabr_0*dely_0*disti_0);
-		  faboz_t0 = (fabz_t-fabr_t*delz_t*disti_t)*(fabz_0-fabr_0*delz_0*disti_0);
+		  //fabox_t0 = (fabx_t-fabr_t*delx_t*disti_t)*(fabx_0-fabr_0*delx_0*disti_0);
+		  //faboy_t0 = (faby_t-fabr_t*dely_t*disti_t)*(faby_0-fabr_0*dely_0*disti_0);
+		  //faboz_t0 = (fabz_t-fabr_t*delz_t*disti_t)*(fabz_0-fabr_0*delz_0*disti_0);
 		  
-		  ind = dist/range*bins;
+		  ind = dist_0/range*bins;
 		  offset= k*bins+ind;
 		  if (fluc_flag) {
 		    //printf ("fluc_lower %d, fluc_upper %d\n",fluc_lower, fluc_upper);
 		    //if ( fluc_lower <= i +1 && i+1 <= fluc_upper && dist_t < range) fabr_t -= mean_fluc_data[ind_t];
 		    //if ( fluc_lower <= j +1 && j+1 <= fluc_upper && dist_0 < range) fabr_0 -= mean_fluc_data[ind_0];
 		  }
+#ifdef TIME_PARA
 		  if(i==0&&j==0) local_count[offset]+=1.0;
 		  // parallel contribution
 		  local_corr[offset][ipair] += fabr_t*fabr_0;
 		  //if (fabr_t*fabr_0*fabr_t*fabr_0 < 0.0000000000001) printf("%d %d,offset %d, local_count[offset] %f,fabr_t %f, fabr_0 %f, delx_t %f,dely_t %f,delz_t %f,delx_0 %f,dely_0 %f,delz_0 %f,delx %f,dely %f,delz %f\n",n,m,offset,local_count[offset],fabr_t, fabr_0,delx_t,dely_t,delz_t,delx_0,dely_0,delz_0,delx,dely,delz);
 		  local_corr_err[offset][ipair] += fabr_t*fabr_0*fabr_t*fabr_0;
 		  // orthogonal contribution
-		  local_corr[offset+corr_length/2][ipair] += fabox_t0+faboy_t0+faboz_t0;
+		  //local_corr[offset+corr_length/2][ipair] += fabox_t0+faboy_t0+faboz_t0;
 		  //if (fabr_t*fabr_0*fabr_t*fabr_0 < 0.0000000000001) printf("%d %d,offset %d, local_count[offset] %f,fabr_t %f, fabr_0 %f, delx_t %f,dely_t %f,delz_t %f,delx_0 %f,dely_0 %f,delz_0 %f,delx %f,dely %f,delz %f\n",n,m,offset,local_count[offset],fabr_t, fabr_0,delx_t,dely_t,delz_t,delx_0,dely_0,delz_0,delx,dely,delz);
-		  local_corr_err[offset+corr_length/2][ipair] += (fabox_t0+faboy_t0+faboz_t0)*(fabox_t0+faboy_t0+faboz_t0);
+		  //local_corr_err[offset+corr_length/2][ipair] += (fabox_t0+faboy_t0+faboz_t0)*(fabox_t0+faboy_t0+faboz_t0);
+#else
+		  if(i==0&&j==0) omp_local_count[offset]+=1.0;
+		  omp_local_corr[offset][ipair] += fabr_t*fabr_0;
+		  omp_local_corr_err[offset][ipair] += fabr_t*fabr_0*fabr_t*fabr_0;
+#endif
 		}
 	      } else { //no variable dependency
 		// since atoms are renamed, you have to access tag[i]
@@ -1731,13 +1764,27 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 	      m--;
 	      if (m < 0) m = nsave-1;
 	    }
-	      double t2 = MPI_Wtime();
-  time_calc += t2 -t1;
 	  }	
 	}
       }
       ipair++;
     }
+    // parallel section finished. Reduction necessary now
+#ifndef TIME_PARA
+    #pragma omp critical
+    {
+      for (i = 0; i < corr_length; i++) {
+	local_count[i] += omp_local_count[i];
+	for (j = 0; j < npair; j++){
+	  local_corr[i][j] += omp_local_corr[i][j];
+	  local_corr_err[i][j] = omp_local_corr_err[i][j];
+	}
+      }
+    }
+    memory->destroy(omp_local_count);
+    memory->destroy(omp_local_corr);
+    memory->destroy(omp_local_corr_err);
+#endif
   }
     //printf("test2\n");
   double t2 = MPI_Wtime();

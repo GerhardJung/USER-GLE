@@ -75,7 +75,7 @@ class FixAveCorrelatePeratom : public Fix {
   char *variable_id;
   int bins;
   int factor;
-  double range;
+  double range,range2,range2_cut;
   double **variable_store;
   int v_counter;
   int nvalues_pp;

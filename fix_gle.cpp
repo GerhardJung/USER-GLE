@@ -219,24 +219,36 @@ void FixGLE::setup(int vflag)
 
   int nlocal= atom->nlocal, n,d,m;
   double **x = atom->x;
-  for ( n=0; n<nlocal; n++ )
+      int itag;
+  int *mask = atom->mask;
+   tagint *tag = atom->tag;
+   
+    imageint *image = atom->image;
+  double unwrap[3];
+
+   
+  for ( n=0; n<nlocal; n++ ){
+    int itag = tag[n]-1;
+    domain->unmap(x[n],image[n],unwrap);
     for ( d=0; d<3; d++ ) {
       for ( m=0; m<=mem_count; m++ ) {
-	save_position[n][d*(mem_count+1)+m] = x[n][d];
+	save_position[itag][d*(mem_count+1)+m] = unwrap[d];
       }
       for ( m=0; m<2*mem_count-1; m++ ) {
-	save_random[n][d*(2*mem_count-1)+m] = random->gaussian();
+	save_random[itag][d*(2*mem_count-1)+m] = random->gaussian();
       }
       
-      array[n][d]=f[n][d];
+      array[itag][d]=f[n][d];
     }
-    
-  int *mask = atom->mask;
+  }
+      
+
   for ( n = 0; n < nlocal; n++) {
+    int itag = tag[n]-1;
     if (mask[n] & groupbit) {
       for (d = 0; d<3;d++) {
-	save_full[n][d] = x[n][d];
-	save_update[n][d] = x[n][d];
+	save_full[itag][d] = x[n][d];
+	save_update[itag][d] = x[n][d];
       }
     }
   }
@@ -255,21 +267,25 @@ void FixGLE::initial_integrate(int vflag)
   int *mask = atom->mask;
   int nlocal = atom->nlocal;
   double fdrag[3],fran[3];
+      tagint *tag = atom->tag;
+    int itag;
   
   // update random numbers
   for ( n=0; n<nlocal; n++ ) {
+    int itag = tag[n]-1;
     for ( d=0; d<3; d++ ) {
-      save_random[n][d*(2*mem_count-1)+firstindex_r] = random->gaussian();
+      save_random[itag][d*(2*mem_count-1)+firstindex_r] = random->gaussian();
     }
   }
 
   for ( n = 0; n < nlocal; n++) {
+    int itag = tag[n]-1;
     if (mask[n] & groupbit) {
 
       // calculate correlated noise 
-      fran[0] = array[n][6] = random_correlator->gaussian(&save_random[n][0],firstindex_r);
-      fran[1] = array[n][7] = random_correlator->gaussian(&save_random[n][2*mem_count-1],firstindex_r);
-      fran[2] = array[n][8] = random_correlator->gaussian(&save_random[n][4*mem_count-2],firstindex_r);
+      fran[0] = array[itag][6] = random_correlator->gaussian(&save_random[itag][0],firstindex_r);
+      fran[1] = array[itag][7] = random_correlator->gaussian(&save_random[itag][2*mem_count-1],firstindex_r);
+      fran[2] = array[itag][8] = random_correlator->gaussian(&save_random[itag][4*mem_count-2],firstindex_r);
       
       for (d = 0; d<3;d++) {
 	
@@ -279,19 +295,19 @@ void FixGLE::initial_integrate(int vflag)
 	if (tn < 0) tn = mem_count;
 	
 	for (m = 1; m<mem_count;m++) {
-	  fdrag[d]+=(save_position[n][d*(mem_count+1)+tn1]-save_position[n][d*(mem_count+1)+tn])*mem_kernel[m];
+	  fdrag[d]+=(save_position[itag][d*(mem_count+1)+tn1]-save_position[itag][d*(mem_count+1)+tn])*mem_kernel[m];
 	  tn1--;
 	  tn--;
 	  if (tn1 < 0) tn1 = mem_count;
 	  if (tn < 0) tn = mem_count;
 	}
 	
-	array[n][3+d]=fdrag[d];
+	array[itag][3+d]=fdrag[d];
 
 	x[n][d] += gjffac*update->dt*v[n][d] 
-	+ gjffac*update->dt*update->dt/2.0/mass[type[0]]*array[n][d]
-	- gjffac*update->dt/2.0/mass[type[0]]*array[n][d+3]
-	+ gjffac*update->dt/2.0/mass[type[0]]*array[n][d+6];
+	+ gjffac*update->dt*update->dt/2.0/mass[type[0]]*array[itag][d]
+	- gjffac*update->dt/2.0/mass[type[0]]*array[itag][d+3]
+	+ gjffac*update->dt/2.0/mass[type[0]]*array[itag][d+6];
 	
       }
       
@@ -367,38 +383,49 @@ void FixGLE::final_integrate()
   double *mass = atom->mass;
   int *mask = atom->mask;
   int nlocal = atom->nlocal;
+    tagint *tag = atom->tag;
+    int itag;
   
   // update positions numbers
+    imageint *image = atom->image;
+  double unwrap[3];
   for ( n=0; n<nlocal; n++ ) {
+    itag = tag[n]-1;
+    domain->unmap(x[n],image[n],unwrap);
     for ( d=0; d<3; d++ ) {
-      save_position[n][d*(mem_count+1)+lastindex_p] = x[n][d]; 
+      save_position[itag][d*(mem_count+1)+lastindex_p] = unwrap[d]; 
     }
   }
 
   for ( n = 0; n < nlocal; n++) {
+     itag = tag[n]-1;
     if (mask[n] & groupbit) {
       for (d = 0; d<3;d++) {
 	int tn = lastindex_p-1;
 	if (tn < 0) tn = mem_count;
-	double v_save = v[n][d];
-	v[n][d] =  gjffac2*v[n][d] 
-	+ update->dt/2.0/mass[type[0]]*(gjffac2*array[n][d]+f[n][d])
-	- gjffac/mass[type[0]]*array[n][d+3]
-	+ gjffac/mass[type[0]]*array[n][d+6];
 	
-	array[n][d]=f[n][d];
-	fran_old[n][d]=array[n][d+6];
+	//printf("%d %f %f\n",n,v[n][d],f[n][d]);
+	
+	v[n][d] =  gjffac2*v[n][d] 
+	+ update->dt/2.0/mass[type[0]]*(gjffac2*array[itag][d]+f[n][d])
+	- gjffac/mass[type[0]]*array[itag][d+3]
+	+ gjffac/mass[type[0]]*array[itag][d+6];
+	
+	//	printf("%d %f %f %f\n",n,v[n][d],f[n][d],array[itag][d]);
+	
+	array[itag][d]=f[n][d];
+	//fran_old[n][d]=array[n][d+6];
 	
 	
 	if (force_flag) {
-	  int tn = lastindex_p-1;
-	  if (tn < 0) tn = mem_count;
-	  array[n][3+d] += (save_position[n][d*(mem_count+1)+lastindex_p]-save_position[n][d*(mem_count+1)+tn])*mem_kernel[0];
-	  array[n][3+d] /= - update->dt;
-	  array[n][6+d] /=  update->dt;
+	  //int tn = lastindex_p-1;
+	  //if (tn < 0) tn = mem_count;
+	 // array[n][3+d] += (save_position[n][d*(mem_count+1)+lastindex_p]-save_position[n][d*(mem_count+1)+tn])*mem_kernel[0];
+	  //array[n][3+d] /= - update->dt;
+	 // array[n][6+d] /=  update->dt;
 	  //if (d==0) printf("fc %f fd %f fr %f\n",f[n][d],array[n][d+3], array[n][d+6] );
 	  //f[n][d] = mass[type[0]]*(v[n][d]-v_save)/update->dt;
-	  f[n][d] += array[n][3+d] + array[n][6+d];
+	  //f[n][d] += array[n][3+d] + array[n][6+d];
 	}
       }
     }
@@ -529,17 +556,20 @@ int FixGLE::pack_exchange(int i, double *buf)
 {
   int offset = 0;
   int d,m;
+      tagint *tag = atom->tag;
+            int itag = tag[i]-1;
   // pack velocity
   for ( d=0; d<3; d++ ) { 
     for ( m=0; m<mem_count+1; m++ ) {
-      buf[offset++] = save_position[i][d*(mem_count+1)+m];
+
+      buf[offset++] = save_position[itag][d*(mem_count+1)+m];
     }
   }
   
   // pack random number
   for ( d=0; d<3; d++ ) { 
     for ( m=0; m<2*mem_count-1; m++ ) {
-      buf[offset++] = save_random[i][d*(2*mem_count-1)+m];
+      buf[offset++] = save_random[itag][d*(2*mem_count-1)+m];
     }
   }
   
@@ -554,17 +584,19 @@ int FixGLE::unpack_exchange(int nlocal, double *buf)
 {
   int offset = 0;
   int d,m;
+  tagint *tag = atom->tag;
+           int  itag = tag[nlocal]-1;
   // pack velocity
   for ( d=0; d<3; d++ ) { 
     for ( m=0; m<mem_count; m++ ) {
-      save_position[nlocal][d*(mem_count+1)+m] = buf[offset++];
+      save_position[itag][d*(mem_count+1)+m] = buf[offset++];
     }
   }
   
   // pack normal random number
   for ( d=0; d<3; d++ ) { 
     for ( m=0; m<2*mem_count-1; m++ ) {
-      save_random[nlocal][d*(2*mem_count-1)+m] = buf[offset++];
+      save_random[itag][d*(2*mem_count-1)+m] = buf[offset++];
     }
   }
   

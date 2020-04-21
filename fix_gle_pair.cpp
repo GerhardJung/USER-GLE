@@ -15,6 +15,10 @@
    Contributing authors: Gerhard Jung (Uni Mainz)
 ------------------------------------------------------------------------- */
 
+/* Performs a generalized Langevin dynamics simulations. Input: Self- and Pair Memory Kernels
+ * Integrates positions and velocities accoring to the algorithm presented in the paper:
+ * Generalized Langevin dynamics: construction and numerical integration of non-Markovian particle-based models  */
+
 
 /*
 Careful:
@@ -69,7 +73,7 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
   global_freq = 1;
   nevery = 1;
   //peratom_freq = 1;
-//peratom_flag = 1;
+  //peratom_flag = 1;
   restart_global = 1;
   
   MPI_Comm_rank(world,&me);
@@ -155,7 +159,7 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
   //size_peratom_cols = 9;
   //array_atom = array;
   vector_flag = 1;
-    size_vector = atom->nlocal;
+  size_vector = atom->nlocal;
   
   // initialize forces
   for ( i=0; i< nlocal; i++) {
@@ -169,7 +173,7 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
     }
   }
   
-  // initiliaze position storage
+  // initiliaze position storage (necesarry for memory calculation, see integrator)
   imageint *image = atom->image;
   tagint *tag = atom->tag;
   int itag;
@@ -179,7 +183,7 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
     domain->unmap(x[itag],image[itag],unwrap);
     for (int dim1=0; dim1<d; dim1++) { 
       for (int t = 0; t < Nt; t++) {
-	x_save[3*itag+dim1][t] = unwrap[dim1];
+        x_save[3*itag+dim1][t] = unwrap[dim1];
       }
     }
   }
@@ -189,7 +193,7 @@ FixGLEPair::FixGLEPair(LAMMPS *lmp, int narg, char **arg) :
     for (int i = 0; i < nlocal; i++) {
       itag = tag[i] - 1;
       for (int dim1=0; dim1<d; dim1++) { 
-	ran[t][d*itag+dim1] = random->gaussian();
+        ran[t][d*itag+dim1] = random->gaussian();
       }
     }
   }
@@ -269,7 +273,7 @@ void FixGLEPair::init()
     neighbor->modify_params(6,c);
   }
   
-  // FFT memory kernel for later processing
+  // FFT memory kernel for later processing (here: done in preprocessing. If no time scale separation between diffusion adn relaxation, it has do be done in every time step)
   int i,t,l;
   int N = 2*Nt -2;
   kiss_fft_scalar * buf;
@@ -290,8 +294,8 @@ void FixGLEPair::init()
       buf[N*(2*l+2)+t] = self_data_dist[Nt*l+t];
       if (t==0 || t==Nt-1){ }
       else {
-	buf[N*(2*l+1)+N-t] = cross_data[Nt*l+t];
-	buf[N*(2*l+2)+N-t] = self_data_dist[Nt*l+t];
+        buf[N*(2*l+1)+N-t] = cross_data[Nt*l+t];
+        buf[N*(2*l+2)+N-t] = self_data_dist[Nt*l+t];
       }
     }
   }
@@ -304,6 +308,7 @@ void FixGLEPair::init()
   for (t=0; t<Nt; t++) {
     self_data_ft[t] = bufout[t].r;
   }
+  // set the fourier transformed kernels
   for (l=0; l< Nd; l++) {
     for (t=0; t<Nt; t++) {
       cross_data_ft[Nt*l+t] = bufout[N*(2*l+1)+t].r;
@@ -387,6 +392,8 @@ void FixGLEPair::initial_integrate(int vflag)
     int ifrom, ito, tid;
     loop_setup_thr(ifrom, ito, tid, inum, nthreads);
     //printf("%d %d\n",ifrom,ito);
+    
+    // determine the dissipative force for particle ifrom to ito (parallelization)
     for (ii = ifrom; ii < ito; ii++) {
       const int i = ilist[ii];
       const int itype = type[i];
@@ -399,64 +406,64 @@ void FixGLEPair::initial_integrate(int vflag)
       jnum = numneigh[i];
       // self-correlation contribution (without distance-dependent contribution)
       for (dim1=0; dim1<d;dim1++) {
-	n = lastindexn;
-	m = lastindexn-1;
-	if (m==-1) m=Nt-1;
-	for (t = 1; t < Nt; t++) {
-	  fd[itag][dim1] += self_data[t]*(x_save[3*itag+dim1][n]-x_save[3*itag+dim1][m]);
-	  n--;
-	  m--;
-	  if (n==-1) n=Nt-1;
-	  if (m==-1) m=Nt-1;
-	}
+        n = lastindexn;
+        m = lastindexn-1;
+        if (m==-1) m=Nt-1;
+        for (t = 1; t < Nt; t++) {
+          fd[itag][dim1] += self_data[t]*(x_save[3*itag+dim1][n]-x_save[3*itag+dim1][m]);
+          n--;
+          m--;
+          if (n==-1) n=Nt-1;
+          if (m==-1) m=Nt-1;
+        }
       }
       // cross-correlation contribution
       for (jj = 0; jj < jnum; jj++) {
-	j = jlist[jj];
-	j &= NEIGHMASK;
-	jtype = type[j];
-	jtag = tag[j]-1;
-	  
-	dr[0] = xtmp - x[j][0];
-	dr[1] = ytmp - x[j][1];
-	dr[2] = ztmp - x[j][2];
+        j = jlist[jj];
+        j &= NEIGHMASK;
+        jtype = type[j];
+        jtag = tag[j]-1;
+          
+        dr[0] = xtmp - x[j][0];
+        dr[1] = ytmp - x[j][1];
+        dr[2] = ztmp - x[j][2];
 
-	rsq = dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2];
-	rsqi = 1/rsq;
-	int dist = (sqrt(rsq) - dStart)/dStep;
-	double ri = sqrt(rsqi);
-	      
-	if (dist < 0) {
-	  printf("dist: %f, lower cutoff: %f\n",sqrt(rsq),dStart);
-	  error->all(FLERR,"Particles closer than lower cutoff in fix/pair\n");
-	} else if (dist < Nd) {
-	  dot = (dr[0]*v[j][0] + dr[1]*v[j][1]+dr[2]*v[j][2])*rsqi*update->dt;
-	  double dot_self = (dr[0]*v[i][0] + dr[1]*v[i][1]+dr[2]*v[i][2])*rsqi*update->dt;
-	  // instantaneous contribution, factor 0.5, because K_0 = 0.5*K(0)
-	  for (dim1=0; dim1<d; dim1++) {
-	    fd[itag][dim1] += 0.5*cross_data[dist*Nt]*dot*dr[dim1];
-	    // distance-dependent contribution of the self-correlation
-	    fd[itag][dim1] += 0.5*self_data_dist[dist*Nt]*dot_self*dr[dim1];
-	  }
-	  n = lastindexn;
-	  m = lastindexn-1;
-	  if (m==-1) m=Nt-1;
-	  for (t = 1; t < Nt; t++) {
-	    dot = (dr[0]*(x_save[3*jtag][n]-x_save[3*jtag][m]) + dr[1]*(x_save[3*jtag+1][n]-x_save[3*jtag+1][m])+dr[2]*(x_save[3*jtag+2][n]-x_save[3*jtag+2][m]))*rsqi;
-	    double dot_self = (dr[0]*(x_save[3*itag][n]-x_save[3*itag][m]) + dr[1]*(x_save[3*itag+1][n]-x_save[3*itag+1][m])+dr[2]*(x_save[3*itag+2][n]-x_save[3*itag+2][m]))*rsqi;
-	    for (dim1=0; dim1<d; dim1++) {
-	      fd[itag][dim1] += cross_data[dist*Nt+t]*dot*dr[dim1];
-	      // distance-dependent contribution of the self-correlation
-	      fd[itag][dim1] += self_data_dist[dist*Nt+t]*dot_self*dr[dim1];
-	      //printf("%f %f %f\n",self_data_dist[dist*Nt+t],dot_self,dr[dim1]);
-	    }
-	    n--;
-	    m--;
-	    if (n==-1) n=Nt-1;
-	    if (m==-1) m=Nt-1;
-	  }
-	  
-	}
+        rsq = dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2];
+        rsqi = 1/rsq;
+        int dist = (sqrt(rsq) - dStart)/dStep;
+        double ri = sqrt(rsqi);
+              
+        if (dist < 0) {
+          printf("dist: %f, lower cutoff: %f\n",sqrt(rsq),dStart);
+          error->all(FLERR,"Particles closer than lower cutoff in fix/pair\n");
+        } else if (dist < Nd) {
+          dot = (dr[0]*v[j][0] + dr[1]*v[j][1]+dr[2]*v[j][2])*rsqi*update->dt;
+          double dot_self = (dr[0]*v[i][0] + dr[1]*v[i][1]+dr[2]*v[i][2])*rsqi*update->dt;
+          // instantaneous contribution, factor 0.5, because K_0 = 0.5*K(0)
+          for (dim1=0; dim1<d; dim1++) {
+            fd[itag][dim1] += 0.5*cross_data[dist*Nt]*dot*dr[dim1];
+            // distance-dependent contribution of the self-correlation
+            fd[itag][dim1] += 0.5*self_data_dist[dist*Nt]*dot_self*dr[dim1];
+          }
+          n = lastindexn;
+          m = lastindexn-1;
+          if (m==-1) m=Nt-1;
+          for (t = 1; t < Nt; t++) {
+            dot = (dr[0]*(x_save[3*jtag][n]-x_save[3*jtag][m]) + dr[1]*(x_save[3*jtag+1][n]-x_save[3*jtag+1][m])+dr[2]*(x_save[3*jtag+2][n]-x_save[3*jtag+2][m]))*rsqi;
+            double dot_self = (dr[0]*(x_save[3*itag][n]-x_save[3*itag][m]) + dr[1]*(x_save[3*itag+1][n]-x_save[3*itag+1][m])+dr[2]*(x_save[3*itag+2][n]-x_save[3*itag+2][m]))*rsqi;
+            for (dim1=0; dim1<d; dim1++) {
+              fd[itag][dim1] += cross_data[dist*Nt+t]*dot*dr[dim1];
+              // distance-dependent contribution of the self-correlation
+              fd[itag][dim1] += self_data_dist[dist*Nt+t]*dot_self*dr[dim1];
+              //printf("%f %f %f\n",self_data_dist[dist*Nt+t],dot_self,dr[dim1]);
+            }
+            n--;
+            m--;
+            if (n==-1) n=Nt-1;
+            if (m==-1) m=Nt-1;
+          }
+          
+        }
       }
     }
     delete [] dr;
@@ -471,9 +478,9 @@ void FixGLEPair::initial_integrate(int vflag)
       //if ( update->ntimestep %10 == 0) { printf("x: %f fc: %f fd: %f fr: %f\n",x[i][0],fc[itag][0],fd[itag][0],fr[itag][0]);}
       for (dim1=0; dim1<d; dim1++) { 
         x[i][dim1] += int_b * update->dt * v[i][dim1] 
-        + int_b * update->dt * update->dt / 2.0 / meff * fc[itag][dim1] 
-        - int_b * update->dt / meff/ 2.0 * fd[itag][dim1]
-      + int_b*update->dt/ 2.0 / meff * fr[itag][dim1]; // convection, conservative, dissipative, random
+          + int_b * update->dt * update->dt / 2.0 / meff * fc[itag][dim1] 
+          - int_b * update->dt / meff/ 2.0 * fd[itag][dim1]
+          + int_b*update->dt/ 2.0 / meff * fr[itag][dim1]; // convection, conservative, dissipative, random
       }
     }
   }
@@ -563,7 +570,7 @@ void FixGLEPair::final_integrate()
     printf("processor %d: time(int_rel1) = %f\n",me,time_int_rel1);
     printf("processor %d: time(noise) = %f\n",me,time_noise);
     printf("processor %d: time(matrix_create) = %f\n",me,time_matrix_create);
-     printf("processor %d: time(forwardft_prep) = %f\n",me,time_forwardft_prep);
+    printf("processor %d: time(forwardft_prep) = %f\n",me,time_forwardft_prep);
     printf("processor %d: time(forwardft) = %f\n",me,time_forwardft);
     printf("processor %d: time(sqrt) = %f\n",me,time_sqrt);
     printf("processor %d: time(backwardft) = %f\n",me,time_backwardft);
@@ -579,9 +586,7 @@ void FixGLEPair::final_integrate()
 
 double FixGLEPair::compute_vector(int n)
 {
-  
   return fr[n][0];
-  
 }
 
 
@@ -647,7 +652,7 @@ void FixGLEPair::restart(char *buf){
   for (i = 0; i < atom->nlocal; i++) {
     for (dim1 = 0; dim1< d; dim1++) {
       for (t = 0; t < Nt; t++) {
-	x_save[3*i+dim1][t] = dbuf[dcount++];
+        x_save[3*i+dim1][t] = dbuf[dcount++];
       }
     }
   }
@@ -866,8 +871,8 @@ void FixGLEPair::update_noise()
       ind = Nt-1+t;
       if (ind >= N) ind -= N;
       for (i=0; i<size;i++) {
-	buf[i*N+ind]=ran[n][i];
-	//printf("%f\n",buf[i*N+ind]);
+        buf[i*N+ind]=ran[n][i];
+        //printf("%f\n",buf[i*N+ind]);
       }
       n--;
       if (n==-1) n=2*Nt-3;
@@ -949,7 +954,7 @@ void FixGLEPair::update_noise()
       for (i=0; i< size; i++) {
         rk[i] = rk[i] - alpha[k-1]*Vn[k-2][i];
         if (k>2) rk[i] -= beta[k-2]*Vn[k-3][i];
-	norm2 += rk[i]*rk[i];
+        norm2 += rk[i]*rk[i];
       }
       norm2 = sqrt(norm2);
       normi = 1.0/norm2;
@@ -958,136 +963,136 @@ void FixGLEPair::update_noise()
       double* Vnk = new double[size]; 
       Vn.push_back(Vnk);
       for (i=0; i< size; i++) {
-	Vn[k-1][i] = normi*rk[i];
+        Vn[k-1][i] = normi*rk[i];
       }
       //rk = A_FT * Vn.col(k-1);
       compute_step(t,dist_pair_list,dr_pair_list,Vn[k-1],rk);
       for (i=0; i< size; i++) {
-	alpha[k] += Vn[k-1][i]*rk[i];
+        alpha[k] += Vn[k-1][i]*rk[i];
       }
 
       if (k>=2) {
-	//generate result vector by contructing Hessenberg-Matrix (and do cholesky-decomposition)
-	/*double * f_Hk = new double[k*k];
-	for (i=0; i<k*k; i++) {
-	  f_Hk[i] = 0.0;
-	}
-	// determine cholesky factors
-	f_Hk[0]=sqrt(alpha[1]);
-	f_Hk[1]=beta[1]/f_Hk[0];
-	// determine cholesky
-	for (i=1; i<k; i++) {
-	  f_Hk[i*k] = sqrt(alpha[i+1]-f_Hk[(i-1)*k+1]*f_Hk[(i-1)*k+1]);
-	  if (i<k-1) f_Hk[i*k+1] = beta[i+1]/f_Hk[i*k];
-	}*/
-	// calculate eigenvalue decompostion of hessenberg matrix
-	double *d = new double[k+1];
-	double *e = new double[k+1];
-	double **z;
-	memory->create(z,k+1,k+1,"gle/pair:z");
-	for (i=0; i<= k; i++) {
-	  d[i] = alpha[i];
-	  e[i] = beta[i];
-	  //printf("%f %f\n",alpha[i],beta[i]);
-	  for (j=0; j<= k; j++) {
-	    if (i==j) z[i][j] = 1.0;
-	    else z[i][j] = 0.0;
-	  }
-	}
-	tqli(d, e, k, z);
-	
-	// calculate sqrt-matrix
-	double **zT;
-	memory->create(zT,k+1,k+1,"gle/pair:zT");
-	for (i=0; i<= k; i++) {
-	  for (j=0; j<= k; j++) {
-	    if (d[i] < 0) {
-	      if (warn == 0) {
-		printf("w %d, iteration %d, eigenvalue %f\n",t,k,d[i]);
-		//error->all(FLERR,"Negative eigenvalue in fix gle/pair decomposition!\n");
-		error->warning(FLERR,"Negative eigenvalue in fix gle/pair decomposition! Set to zero!\n");
-		warn = 1;
-		d[i] = 0.0;
-	      } else {
-		d[i] = 0.0;
-	      }
-	    }
-	    zT[i][j] = sqrt(d[i])*z[j][i];
-	  }
-	}
-	double **f_Hk;
-	memory->create(f_Hk,k+1,k+1,"gle/pair:f_Hk");
-	for (i=0; i<= k; i++) {
-	  for (int l=0; l<= k; l++) {
-	    f_Hk[i][l] = 0.0;
-	    for (j=0; j<= k; j++) {
-	      f_Hk[i][l] += z[i][j]*zT[j][l];
-	    }
-	  }
-	}
-	
-	/*printf("f_Hk\n");
-	for (i=0; i<= k; i++) {
-	  for (j=0; j<= k; j++) {
-	    printf("%f ",f_Hk[i][j]);
-	  }
-	  printf("\n");
-	}
-	
-	for (i=0; i<= k; i++) {
-	  for (int l=0; l<= k; l++) {
-	    z[i][l] = 0.0;
-	    for (j=0; j<= k; j++) {
-	      z[i][l] += f_Hk[i][j]*f_Hk[j][l];
-	    }
-	  }
-	}
-	
-	printf("f_Hk*f_Hk\n");
-	for (i=0; i<= k; i++) {
-	  for (j=0; j<= k; j++) {
-	    printf("%f ",z[i][j]);
-	  }
-	  printf("\n");
-	}*/
-	delete [] d;
-	delete [] e;
-	memory->destroy(z);
-	memory->destroy(zT);
-	  
-	// determine result vector
-	double *res = new double[size];
-	for (i=0; i< size; i++) {
-	  res[i] = 0.0;
-	  for (j=0; j<k; j++) {
-	    res[i] += Vn[j][i]*f_Hk[1][j+1]*norm;
-	  }
-	}
-	memory->destroy(f_Hk);
-	if (k==2) {
-	  for (i=0; i< size; i++) {
-	    FT_w[t][i]=res[i];
-	  }
-	  delete [] res;
-	}
-	else {
-	  double diff = 0.0;
-	  for (i=0; i< size; i++) {
-	    diff += (FT_w[t][i] - res[i])*(FT_w[t][i] - res[i]);
-	  }
-	  diff = sqrt(diff);
-	  for (i=0; i< size; i++) {
-	    FT_w[t][i] = res[i];
-	  }
-	  delete [] res;
-	  // check for convergence
-	  if (diff < tolLanczos) {
-	    //printf("proc: %d k: %d\n",omp_get_thread_num(),k);
-	    //work[omp_get_thread_num()]+=k;
-	    k_tot += k;
-	    break;
-	  }
-	}
+        //generate result vector by contructing Hessenberg-Matrix (and do cholesky-decomposition)
+        /*double * f_Hk = new double[k*k];
+        for (i=0; i<k*k; i++) {
+          f_Hk[i] = 0.0;
+        }
+        // determine cholesky factors
+        f_Hk[0]=sqrt(alpha[1]);
+        f_Hk[1]=beta[1]/f_Hk[0];
+        // determine cholesky
+        for (i=1; i<k; i++) {
+          f_Hk[i*k] = sqrt(alpha[i+1]-f_Hk[(i-1)*k+1]*f_Hk[(i-1)*k+1]);
+          if (i<k-1) f_Hk[i*k+1] = beta[i+1]/f_Hk[i*k];
+        }*/
+        // calculate eigenvalue decompostion of hessenberg matrix
+        double *d = new double[k+1];
+        double *e = new double[k+1];
+        double **z;
+        memory->create(z,k+1,k+1,"gle/pair:z");
+        for (i=0; i<= k; i++) {
+          d[i] = alpha[i];
+          e[i] = beta[i];
+          //printf("%f %f\n",alpha[i],beta[i]);
+          for (j=0; j<= k; j++) {
+            if (i==j) z[i][j] = 1.0;
+            else z[i][j] = 0.0;
+          }
+        }
+        tqli(d, e, k, z);
+        
+        // calculate sqrt-matrix
+        double **zT;
+        memory->create(zT,k+1,k+1,"gle/pair:zT");
+        for (i=0; i<= k; i++) {
+          for (j=0; j<= k; j++) {
+            if (d[i] < 0) {
+              if (warn == 0) {
+          printf("w %d, iteration %d, eigenvalue %f\n",t,k,d[i]);
+          //error->all(FLERR,"Negative eigenvalue in fix gle/pair decomposition!\n");
+          error->warning(FLERR,"Negative eigenvalue in fix gle/pair decomposition! Set to zero!\n");
+          warn = 1;
+          d[i] = 0.0;
+              } else {
+          d[i] = 0.0;
+              }
+            }
+            zT[i][j] = sqrt(d[i])*z[j][i];
+          }
+        }
+        double **f_Hk;
+        memory->create(f_Hk,k+1,k+1,"gle/pair:f_Hk");
+        for (i=0; i<= k; i++) {
+          for (int l=0; l<= k; l++) {
+            f_Hk[i][l] = 0.0;
+            for (j=0; j<= k; j++) {
+              f_Hk[i][l] += z[i][j]*zT[j][l];
+            }
+          }
+        }
+        
+        /*printf("f_Hk\n");
+        for (i=0; i<= k; i++) {
+          for (j=0; j<= k; j++) {
+            printf("%f ",f_Hk[i][j]);
+          }
+          printf("\n");
+        }
+        
+        for (i=0; i<= k; i++) {
+          for (int l=0; l<= k; l++) {
+            z[i][l] = 0.0;
+            for (j=0; j<= k; j++) {
+              z[i][l] += f_Hk[i][j]*f_Hk[j][l];
+            }
+          }
+        }
+        
+        printf("f_Hk*f_Hk\n");
+        for (i=0; i<= k; i++) {
+          for (j=0; j<= k; j++) {
+            printf("%f ",z[i][j]);
+          }
+          printf("\n");
+        }*/
+        delete [] d;
+        delete [] e;
+        memory->destroy(z);
+        memory->destroy(zT);
+          
+        // determine result vector
+        double *res = new double[size];
+        for (i=0; i< size; i++) {
+          res[i] = 0.0;
+          for (j=0; j<k; j++) {
+            res[i] += Vn[j][i]*f_Hk[1][j+1]*norm;
+          }
+        }
+        memory->destroy(f_Hk);
+        if (k==2) {
+          for (i=0; i< size; i++) {
+            FT_w[t][i]=res[i];
+          }
+          delete [] res;
+        }
+        else {
+          double diff = 0.0;
+          for (i=0; i< size; i++) {
+            diff += (FT_w[t][i] - res[i])*(FT_w[t][i] - res[i]);
+          }
+          diff = sqrt(diff);
+          for (i=0; i< size; i++) {
+            FT_w[t][i] = res[i];
+          }
+          delete [] res;
+          // check for convergence
+          if (diff < tolLanczos) {
+            //printf("proc: %d k: %d\n",omp_get_thread_num(),k);
+            //work[omp_get_thread_num()]+=k;
+            k_tot += k;
+            break;
+          }
+        }
       }
       if (k==mLanczos) k_tot += k;
     }
@@ -1120,15 +1125,15 @@ void FixGLEPair::update_noise()
     for (int i=ifrom; i<ito;i++) {
       itag = tag[i]-1;
       for (int t = 0; t < Nt; t++) {
-	if (t==0 || t==Nt-1) {
-	  fr[itag][0]+= FT_w[t][3*itag+0]/N*sqrt(update->dt);
-	  fr[itag][1]+= FT_w[t][3*itag+1]/N*sqrt(update->dt);
-	  fr[itag][2]+= FT_w[t][3*itag+2]/N*sqrt(update->dt);
-	} else {
-	  fr[itag][0]+= 2*FT_w[t][3*itag+0]/N*sqrt(update->dt);
-	  fr[itag][1]+= 2*FT_w[t][3*itag+1]/N*sqrt(update->dt);
-	  fr[itag][2]+= 2*FT_w[t][3*itag+2]/N*sqrt(update->dt);
-	}
+        if (t==0 || t==Nt-1) {
+          fr[itag][0]+= FT_w[t][3*itag+0]/N*sqrt(update->dt);
+          fr[itag][1]+= FT_w[t][3*itag+1]/N*sqrt(update->dt);
+          fr[itag][2]+= FT_w[t][3*itag+2]/N*sqrt(update->dt);
+        } else {
+          fr[itag][0]+= 2*FT_w[t][3*itag+0]/N*sqrt(update->dt);
+          fr[itag][1]+= 2*FT_w[t][3*itag+1]/N*sqrt(update->dt);
+          fr[itag][2]+= 2*FT_w[t][3*itag+2]/N*sqrt(update->dt);
+        }
       }
       //printf(" fr : itag %d  %f %f %f \n",itag,fr[itag][0],fr[itag][1],fr[itag][2]);
     }
@@ -1147,7 +1152,7 @@ void FixGLEPair::update_noise()
 }
 
 /* ----------------------------------------------------------------------
-   multiplies an input vector with interaction matrix
+   multiplies an input vector with interaction matrix (using neighobr lists)
 ------------------------------------------------------------------------- */
 
 void FixGLEPair::compute_step(int w, int* dist_pair_list, double **dr_pair_list, double* input, double* output)
@@ -1196,13 +1201,13 @@ void FixGLEPair::compute_step(int w, int* dist_pair_list, double **dr_pair_list,
       dr = dr_pair_list[dist_counter++];
 	    
       if (dist < Nd) {
-	dot = dr[0]*input[jtag*d]+dr[1]*input[jtag*d+1]+dr[2]*input[jtag*d+2];
-	double dot_self = dr[0]*input[itag*d] + dr[1]*input[itag*d+1]+dr[2]*input[itag*d+2];
-	for (dim1=0; dim1<d;dim1++) {
-	  output[itag*d+dim1] += cross_data_ft[dist*Nt+w]* dot*dr[dim1];
-	  output[itag*d+dim1] += self_data_dist_ft[dist*Nt+w]* dot_self*dr[dim1];
-	  //output[itag*d+dim1] += 0.0000001* dot_self*dr[dim1];
-	}
+        dot = dr[0]*input[jtag*d]+dr[1]*input[jtag*d+1]+dr[2]*input[jtag*d+2];
+        double dot_self = dr[0]*input[itag*d] + dr[1]*input[itag*d+1]+dr[2]*input[itag*d+2];
+        for (dim1=0; dim1<d;dim1++) {
+          output[itag*d+dim1] += cross_data_ft[dist*Nt+w]* dot*dr[dim1];
+          output[itag*d+dim1] += self_data_dist_ft[dist*Nt+w]* dot_self*dr[dim1];
+          //output[itag*d+dim1] += 0.0000001* dot_self*dr[dim1];
+        }
       }
     }
   }

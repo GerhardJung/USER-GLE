@@ -1,12 +1,13 @@
-
 /* ----------------------------------------------------------------------
    LAMMPS - Large-scale Atomic/Molecular Massively Parallel Simulator
    http://lammps.sandia.gov, Sandia National Laboratories
    Steve Plimpton, sjplimp@sandia.gov
+
    Copyright (2003) Sandia Corporation.  Under the terms of Contract
    DE-AC04-94AL85000 with Sandia Corporation, the U.S. Government retains
    certain rights in this software.  This software is distributed under
    the GNU General Public License.
+
    See the README file in the top-level LAMMPS directory.
 ------------------------------------------------------------------------- */
 
@@ -14,13 +15,14 @@
 // see Appendix B: J. Chem. Phys. 143, 243128 (2015)
 
 #include <math.h>
-#include "random_correlater.h"
+#include "random_correlator.h"
 #include "comm.h"
 #include "random_mars.h"
 #include "error.h"
 
-
 using namespace LAMMPS_NS;
+
+#define FT_METHOD
 
 /* ---------------------------------------------------------------------- */
 
@@ -46,108 +48,83 @@ RanCor::~RanCor()
 
 void RanCor::init()
 {
-  int i,n,s;
   
-  
-#ifndef PRONY
-  
-  // init coeff by fourier transformation
+#ifdef FT_METHOD
   init_acoeff();
 
-  // init optimizer
-  /*NelderMeadOptimizer opt(2*mem_count-1, precision, mem_kernel, mem_count);
+#else  
+  int i,n,s;
   
-  // request a simplex to start with
-  Vector v(a_coeff,2*mem_count-1);
-  init_opt(opt,v,2*mem_count-1);
-  // optimize
-  v = opt.step(v, min_function(v,2*mem_count-1));
-  printf("optimizer quality: %f\n",min_function(v,2*mem_count-1)); 
-  
-  for (i=0; i<2*mem_count-1; i++) {
-    a_coeff[i] = v[i];
-  }*/
-  
-  for (i=0; i<2*mem_count-1; i++) {
-    //a_coeff[i]*=sqrt(norm);
-  }
-#else //Prony-Series
-  double *mem_save = new double[mem_count]; 
+  // rescale the memory to simplify the optimization
   double norm = mem_kernel[0];
   for (int i=0; i<mem_count; i++) {
-    mem_kernel[i] /= norm;
-    mem_save[i]=mem_kernel[i];
+    mem_kernel[i]/=norm;
   }
+  
+  N = mem_count+5;
+  a_coeff = new float[N];
+  for (i=0; i< N; i++) a_coeff[i]=0.0;
+  
+  //optimize alpha-parameter for correlated noise
 
-  a_coeff = new double[6];
-  
-  int N_prob = 5;
-  
-  for (int j=0; j<N_prob;j++) {
-  
-    int dim_cos = 3;
-    int dim_sin = 3;
-    int dim_tot = dim_cos + dim_sin;
-  
-    a_coeff[0] = 0.1;
-    a_coeff[1] = 0.1;
-    a_coeff[2] = 0.1;
-    a_coeff[3] = 0.1;
-    a_coeff[4] = 0.1;
-    a_coeff[5] = 0.1;
-  
-    // init optimizer
-    NelderMeadOptimizer opt(dim_cos,dim_tot, precision, mem_kernel, mem_count);
-  
-    // request a simplex to start with
-    Vector v(a_coeff,dim_tot);
-    init_opt(opt,v,dim_cos,dim_tot);
+  NelderMeadOptimizer opt(N, precision, mem_kernel, mem_count);
 
-    v = opt.step(v, min_function(v,dim_cos,dim_tot));
-    printf("optimizer quality: %f\n",min_function(v,dim_cos,dim_tot)); 
-    
-    
-    for (i=0; i<dim_tot; i++) a_coeff[i] = v[i];
-    
-    for (n=0; n<mem_count; n++) {
-      double sum = 0;
-      for(s=0;s<dim_cos;s+=3){
-	sum += a_coeff[s]*exp(-a_coeff[s+1]*n)*cos(a_coeff[s+2]*n);
-      }
-      for(s=dim_cos;s<dim_tot;s+=3){
-	sum += a_coeff[s]*exp(-a_coeff[s+1]*n)*sin(a_coeff[s+2]*n);
-      }
-      mem_kernel[n]-=sum;
+  // request a simplex to start with
+  Vector v(a_coeff,N);
+
+  init_opt(opt,v,N);
+  //opt.print_v();
+
+  v = opt.step(v, min_function(v,N));
+  printf("optimizer quality: %f\n",min_function(v,N));
+
+  for ( i=0; i < N; i++ ) a_coeff[i] = v[i];
+
+  for (i=0; i< N; i++) printf("%f ",v[i]);
+  printf("\n");
+
+  
+  
+  // scale back the memory and the parameter
+  for (int i=0; i<mem_count; i++) {
+    mem_kernel[i]*=norm;
+  }
+  for (int i=0; i<N; i++) {
+    a_coeff[i] *= sqrt(norm);
+  }
+  
+  FILE * out=fopen("ansatz.dat","w");
+  for(n=0;n<mem_count;n++){
+    double loc_sum = 0.0;
+    for(s=0;s<N;s++){
+      int ind = n+s;
+      //if (n+s>2*mem_count-2) ind -= N;
+      if (n+s>N-1) continue;
+      loc_sum += a_coeff[s]*a_coeff[ind];
     }
-  
-  }
-  
-  FILE * out;
-  out=fopen("ansatz.dat","w");
-  for (n=0; n<mem_count; n++) {
-    fprintf(out,"%d %f %f %f\n",n,mem_save[n],mem_save[n]-mem_kernel[n],mem_kernel[n]);
+    fprintf(out,"%d %f %f %f\n",n,mem_kernel[n],loc_sum,mem_kernel[n]-loc_sum);
+        // correct the memory kernel to fullfill the fluctuation dissipation theorem
+    mem_kernel[n] = loc_sum;
   }
   fclose(out);
-
-  error->all(FLERR,"break");
 #endif
+  
 }
 
 /* ----------------------------------------------------------------------
    gaussian RN
 ------------------------------------------------------------------------- */
+
 double RanCor::gaussian(double* normal, int firstindex)
 {
   // calculate corr. random number
   int i,j;
   double ran = 0.0;
   j = firstindex;
-  for (i=0; i<2*mem_count-1; i++) {
-    int ind = i;
-    if (ind >= 2*mem_count-1) ind -= 2*mem_count-1;
+  for (i=0; i<N; i++) {
     ran += normal[j]*a_coeff[i];
     j--;
-    if (j == -1) j = 2*mem_count-2;
+    if (j <0) j += 2*mem_count-1;
   }
   return ran;
 }
@@ -157,9 +134,9 @@ double RanCor::gaussian(double* normal, int firstindex)
   ----------------------------------------------------------------------  */
 void RanCor::init_acoeff() {
   
-  int N = 2*mem_count-1;
+  N = 2*mem_count-1;
   
-  a_coeff = new double[N];
+  a_coeff = new float[N];
   double * a_coeff_imag = new double[N];
   for (int i=0; i< N; i++){
     a_coeff[i]=0.0;
@@ -213,7 +190,7 @@ fclose(out);
       if (n+s>2*mem_count-2) ind -= N;
       loc_sum += a_coeff[s]*a_coeff[ind];
     }
-    fprintf(out,"%d %f %f %f\n",n,mem_kernel[n],loc_sum,mem_kernel[n]-loc_sum);
+    fprintf(out,"%d %.10f %.10f %.10f\n",n,mem_kernel[n],loc_sum,mem_kernel[n]-loc_sum);
         // correct the memory kernel to fullfill the fluctuation dissipation theorem
     mem_kernel[n] = loc_sum;
   }
@@ -227,62 +204,52 @@ fclose(out);
 /* ---------------------------------------------------------------------- 
   initializes the nm optimizer
   ----------------------------------------------------------------------  */
-void RanCor::init_opt(NelderMeadOptimizer &opt, Vector v, int dim_cos, int dim_tot) {
-  
-  opt.insert(v,min_function(v,dim_cos,dim_tot));
-  
-  double factor = 0.5;
 
-  double p = factor/(dim_tot*sqrt(2))*(sqrt(dim_tot+1)+dim_tot-1);
-  double q = factor/(dim_tot*sqrt(2))*(sqrt(dim_tot+1)-1);
+void RanCor::init_opt(NelderMeadOptimizer &opt, Vector v, int dimension) {
+  
+  opt.insert(v,min_function(v,dimension));
+  
+  double p = 10.0/(dimension*sqrt(2))*(sqrt(dimension+1)+dimension-1);
+  double q = 10.0/(dimension*sqrt(2))*(sqrt(dimension+1)-1);
 
   int d,i;
-  for (i=0; i<dim_tot; i++) {
-    Vector new_v(a_coeff,dim_tot);
-    for (d=0; d<dim_tot; d++) {
+  for (i=0; i<dimension; i++) {
+    Vector new_v(a_coeff,dimension);
+    for (d=0; d<dimension; d++) {
       if (d!=i) {
 	new_v[d] += q;
       } else {
 	new_v[d] += p;
       }
     }
-    opt.insert(new_v,min_function(new_v,dim_cos,dim_tot));
+
+    opt.insert(new_v,min_function(new_v,dimension));
   }
+ 
 }
  
 /* ---------------------------------------------------------------------- 
   function for the minimization process to determine correlation coefficients
   ----------------------------------------------------------------------  */
-/*double RanCor::min_function(Vector v, int dimension)
+
+float RanCor::min_function(Vector v, int dimension)
 {
+  float sum=0.0;
   int n,s;
-  double sum = 0.0;
-  for(n=0;n<(dimension+1)/2;n++){
+    
+  for(n=0;n<mem_count;n++){
     double loc_sum = 0.0;
     for(s=0;s<dimension;s++){
-      if (n-s>0) continue;
-      loc_sum += v[s]*v[n-s+dimension-1];
+      int ind = n+s;
+      //if (n+s>dimension-1) ind -= dimension;
+      if (n+s>dimension-1) continue;
+      loc_sum += v[s]*v[ind];
     }
-    loc_sum -= mem_kernel[n];   
+    loc_sum -= mem_kernel[n];
     sum += loc_sum*loc_sum;
   }
+  
   return sum;
-}*/
-double RanCor::min_function(Vector v, int dim_cos, int dim_tot) {
-	  int n,s;
-	  double sum = 0.0;
-	  for(n=0;n<mem_count;n++){
-	    double loc_sum = 0.0;
-	    for(s=0;s<dim_cos;s+=3){
-	      loc_sum += v[s]*exp(-v[s+1]*n)*cos(v[s+2]*n);
-	    }
-	    for(s=dim_cos;s<dim_tot;s+=3){
-	      loc_sum += v[s]*exp(-v[s+1]*n)*sin(v[s+2]*n);
-	    }
-	    loc_sum -= mem_kernel[n];   
-	    sum += loc_sum*loc_sum;
-	  }
-	  return sum;
 }
 
 /* ---------------------------------------------------------------------- 
@@ -305,7 +272,7 @@ void RanCor::forwardDFT(double *data, int N, complex<double> *result) {
 /* ---------------------------------------------------------------------- 
   performs a backward DFT with complex input (and reell output)
   ----------------------------------------------------------------------  */
-void RanCor::inverseDFT(complex<double> *data, int N, double *result, double *result_imag) { 
+void RanCor::inverseDFT(complex<double> *data, int N, float *result, double *result_imag) { 
   for (int n = -mem_count+1; n < mem_count; n++) { 
     result[n+mem_count-1] = 0.0; 
     for (int k = -mem_count+1; k < mem_count; k++) { 

@@ -31,21 +31,19 @@ class RanCor : protected Pointers {
   double *mem_kernel;
   
   double precision;
-  double *a_coeff;
-  double *a_coeff_small;
+  float *a_coeff;
+    double *a_coeff_small;
   double rho;
-  double t_target;
+  int N;
   
   void init();
-  double min_function(Vector, int, int);
-  void init_opt(NelderMeadOptimizer &opt, Vector v, int, int);
-  void init_acoeff();
+  float min_function(Vector, int);
+  void init_opt(NelderMeadOptimizer &opt, Vector v, int);
+    void init_acoeff();
   
   void forwardDFT(double *data, int N, complex<double> *result);
-  void inverseDFT(complex<double> *data, int N, double *result, double *result_imag);
-  
-  FILE * test_out;
-  
+  void inverseDFT(complex<double> *data, int N, float *result, double *result_imag);
+
 };
 
 }

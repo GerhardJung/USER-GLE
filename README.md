@@ -9,3 +9,5 @@ This repository contains various LAMMPS packages:
 - calculating peratom time correlation functions
 - reconstruction of memory kernels
 - GLE simulations
+
+Tested for Lammps-Version 10Aug17

@@ -65,9 +65,9 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   MPI_Comm_rank(world,&me);
   MPI_Comm_size(world,&nprocs);
 
-  nevery = force->inumeric(FLERR,arg[3]);
-  nrepeat = force->inumeric(FLERR,arg[4]);
-  nfreq = force->inumeric(FLERR,arg[5]);
+  nevery = utils::inumeric(FLERR,arg[3],false,lmp);
+  nrepeat = utils::inumeric(FLERR,arg[4],false,lmp);
+  nfreq = utils::inumeric(FLERR,arg[5],false,lmp);
 
 
   global_freq = nfreq;
@@ -165,11 +165,11 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
       iarg += 2;
     } else if (strcmp(arg[iarg],"start") == 0) {
       if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
-      startstep = force->inumeric(FLERR,arg[iarg+1]);
+      startstep = utils::inumeric(FLERR,arg[iarg+1],false,lmp);
       iarg += 2;
     } else if (strcmp(arg[iarg],"prefactor") == 0) {
       if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
-      prefactor = force->numeric(FLERR,arg[iarg+1]);
+      prefactor = utils::numeric(FLERR,arg[iarg+1],false,lmp);
       iarg += 2;
     } else if (strcmp(arg[iarg],"file") == 0) {
       if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
@@ -199,11 +199,11 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
 	variable_flag = DIST_DEPENDENED;
 	variable_nvalues = 3;
       } else error->all(FLERR,"Illegal fix ave/correlate/peratom command");
-      range = force->numeric(FLERR,arg[iarg+2]);
+      range = utils::numeric(FLERR,arg[iarg+2],false,lmp);
       range2 = range*range;
       range2_cut = (range+1.0)*(range+1.0);
       // +1.0 so that potential pairs are not neglected. +1.0 is somewhat arbitrary.
-      bins = force->inumeric(FLERR,arg[iarg+3]);
+      bins = utils::inumeric(FLERR,arg[iarg+3],false,lmp);
       iarg += 4;
     } else if (strcmp(arg[iarg],"switch") == 0) {
       if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
@@ -213,8 +213,8 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
       else if (strcmp(arg[iarg+1],"pergroup/perpair") == 0) {
 	if (iarg+4 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
 	memory_switch = PERGROUP_PERPAIR;
-	nvalues_pg = force->inumeric(FLERR,arg[iarg+2]);
-	nvalues_pp = force->inumeric(FLERR,arg[iarg+3]);
+	nvalues_pg = utils::inumeric(FLERR,arg[iarg+2],false,lmp);
+	nvalues_pp = utils::inumeric(FLERR,arg[iarg+3],false,lmp);
 	if ((nvalues_pg + nvalues_pp) != nvalues) {
 	  error->all(FLERR,"Illegal fix ave/correlate/peratom command");
 	}
@@ -223,7 +223,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
       else if (strcmp(arg[iarg+1],"group") == 0) {
 	memory_switch = GROUP;
 	if (iarg+3 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
-	ngroup_glo = force->inumeric(FLERR,arg[iarg+2]);
+	ngroup_glo = utils::inumeric(FLERR,arg[iarg+2],false,lmp);
 	if (iarg+4+ngroup_glo > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
 	cor_groupbit = new int[ngroup_glo];
 	cor_group = new int[ngroup_glo];
@@ -233,7 +233,8 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
 	  cor_groupbit[i] = group->bitmask[igroup];
 	  cor_group[i]=igroup;
 	}
-	nvalues = force->inumeric(FLERR,arg[iarg+3+ngroup_glo]);
+	nvalues = utils::inumeric(FLERR,arg[iarg+3+ngroup_glo],false,lmp);
+  
 	cor_valbit = new int[nvalues];
 	if (iarg+4+ngroup_glo+nvalues > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
 	for (int i=0; i<nvalues; i++) {
@@ -378,7 +379,7 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
 	delete [] molecule;
 	
 	// determine value to be calculated
-	nvalues = force->inumeric(FLERR,arg[iarg]);
+	nvalues = utils::inumeric(FLERR,arg[iarg],false,lmp);
 	cor_valbit = new int[nvalues];
 	if (iarg+1+nvalues > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
 	for (int i=0; i<nvalues; i++) {
@@ -458,8 +459,8 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
         }
       }
       fluc_flag = 1;
-      fluc_lower  = force->inumeric(FLERR,arg[iarg+2]);
-      fluc_upper  = force->inumeric(FLERR,arg[iarg+3]);
+      fluc_lower  =  utils::inumeric(FLERR,arg[iarg+2],false,lmp);
+      fluc_upper  = utils::inumeric(FLERR,arg[iarg+3],false,lmp);
       iarg += 4;
     } else if (strcmp(arg[iarg],"title1") == 0) {
       if (iarg+2 > narg) error->all(FLERR,"Illegal fix ave/correlate/peratom command");
@@ -743,7 +744,8 @@ FixAveCorrelatePeratom::FixAveCorrelatePeratom(LAMMPS * lmp, int narg, char **ar
   if(nvalues > 0) {
     if(memory_switch == PERATOM){
       // need to grow array size
-      comm->maxexchange_fix = MAX(comm->maxexchange_fix,(nvalues+variable_nvalues)*nsave);
+      // DEPRECATED: might need to be updated to be used in parallel environment
+      //comm->maxexchange_fix = MAX(comm->maxexchange_fix,(nvalues+variable_nvalues)*nsave);
       grow_arrays(atom->nmax);
       atom->add_callback(0);
       double *group_mass_loc;
@@ -1035,7 +1037,6 @@ void FixAveCorrelatePeratom::end_of_step()
   // care here, that sometimes the index changes -> use tag[a]
   if(memory_switch!=GROUP && memory_switch!=ATOM){
     for (i = 0; i < nvalues; i++) {
-      int memory_created = 0;
       v2i = value2index[i];
       // invoke compute if not previously invoked
       if (which[i] == COMPUTE) {
@@ -1051,7 +1052,6 @@ void FixAveCorrelatePeratom::end_of_step()
 	    peratom_data= compute->vector_atom;
 	  else{
 	    memory->create(peratom_data, nlocal, "ave/correlation/peratom:peratom_data");
-      memory_created = 1;
 	    for (a= 0; a < nlocal; a++) {
 	      peratom_data[tag[a]-1] = compute->array_atom[a][argindex[i]-1];
 	    }
@@ -1061,7 +1061,6 @@ void FixAveCorrelatePeratom::end_of_step()
       } else if (which[i] == FIX) {
 	if (memory_switch==PERPAIR) {
 	  memory->create(peratom_data, nlocal*nlocal, "ave/correlation/peratom:peratom_data");
-    memory_created = 1;
 	  for (a= 0; a < nlocal; a++) {
 	    for (b= 0; b < nlocal; b++) {
 	      peratom_data[a*nlocal+b] = modify->fix[v2i]->array_atom[a][(argindex[i]-1)*nlocal+b];
@@ -1070,7 +1069,6 @@ void FixAveCorrelatePeratom::end_of_step()
 	  }
 	} else if (memory_switch==PERGROUP_PERPAIR) {
 	  memory->create(peratom_data, nlocal*nlocal, "ave/correlation/peratom:peratom_data");
-    memory_created = 1;
 	  if (i < nvalues_pg) {
 	    if (argindex[i] == 0) {
 	      for (a= 0; a < nlocal; a++) {
@@ -1094,7 +1092,6 @@ void FixAveCorrelatePeratom::end_of_step()
 	    peratom_data= modify->fix[v2i]->vector_atom;
 	  else{
 	    memory->create(peratom_data, nlocal, "ave/correlation/peratom:peratom_data");
-      memory_created = 1;
 	    for (a= 0; a < nlocal; a++) {
 	      peratom_data[a] = modify->fix[v2i]->array_atom[a][argindex[i]-1];
 	    }
@@ -1105,7 +1102,6 @@ void FixAveCorrelatePeratom::end_of_step()
 	// variable with perpair not implemented
 	if (memory_switch==PERGROUP_PERPAIR) memory->create(peratom_data, nlocal*nlocal, "ave/correlation/peratom:peratom_data");
 	else memory->create(peratom_data, nlocal, "ave/correlation/peratom:peratom_data");
-  memory_created = 1;
 	input->variable->compute_atom(v2i, igroup, peratom_data, 1, 0);
 	
       }
@@ -1141,7 +1137,7 @@ void FixAveCorrelatePeratom::end_of_step()
 	}
       }
       //if this was done by an atom-style variable, we need to free the mem we allocated
-      if (memory_created == 1) {
+      if (which[i] == VARIABLE || which[i] == FIX ) {
 	//printf("destroy %d\n",i);
 	memory->destroy(peratom_data);
       }
@@ -1404,8 +1400,7 @@ void FixAveCorrelatePeratom::end_of_step()
 	if (save_count[i]) {
 	  for (j = 0; j < npair; j++) {
 	    //if (save_corr[i][j]*save_corr[i][j]/save_count[i]/save_count[i] < 0.00000000001) printf("i %d, j %d, save_corr[i][j] %f save_count[i] %f\n",i,j,save_corr[i][j],save_count[i]);
-	    fprintf(fp," %.8lg %.8lg",prefactor*save_corr[i][j]/save_count[i],prefactor*save_corr_err[i][j]/save_count[i]);
-       // printf("print j = %d\n",j);
+	    fprintf(fp," %.8lg %g",prefactor*save_corr[i][j]/save_count[i],prefactor*save_corr_err[i][j]/save_count[i]);
 	  }
 	} else {
 	  for (j = 0; j < npair; j++)
@@ -1417,7 +1412,7 @@ void FixAveCorrelatePeratom::end_of_step()
 	    fprintf(fp," %lf",save_count[offset]);
 	  if (save_count[i]) {
 	    for (j = 0; j < npair; j++)
-	      fprintf(fp," %.15lg %.8lg",prefactor*save_corr[offset][j]/save_count[i],prefactor*save_corr_err[offset][j]/save_count[i]);
+	      fprintf(fp," %.15lg %g",prefactor*save_corr[offset][j]/save_count[i],prefactor*save_corr_err[offset][j]/save_count[i]);
 	  } else {
 	  for (j = 0; j < npair; j++)
 	    fprintf(fp," 0.0 0.0");
@@ -1554,8 +1549,8 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
       save_count[i] += global_count[i];
       omp_local_count[i] = 0.0;
       for (j = 0; j < npair; j++){
-        omp_local_corr[i][j] = 0.0;
-        omp_local_corr_err[i][j] = 0.0;
+	omp_local_corr[i][j] = 0.0;
+	omp_local_corr_err[i][j] = 0.0;
       }
     }
     int afrom, ato, tid;
@@ -1568,215 +1563,213 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
       double nvalues_lower = i;
       if (type == FULL) nvalues_lower = 0;
       for (j = nvalues_lower; j < nvalues_upper; j+=incr_nvalues) {
-        //printf("i %d j %d ipair %d\n",i,j,ipair);
-        for (a= afrom; a < ato; a++) {
-          //determine whether just autocorrelation or also cross correlation (different atoms)
-          double ngroup_lower = a;
-          double ngroup_upper = a+1;
-          if (type == CROSS || type == AUTOCROSS || type == UPPERCROSS){
-            ngroup_lower = a;
-            ngroup_upper = ngroup_glo;
-          }
-          for (b = ngroup_lower; b < ngroup_upper; b++) {
-            if ((type == CROSS || type == UPPERCROSS) && a==b) continue;
+	//printf("i %d j %d ipair %d\n",i,j,ipair);
+	for (a= afrom; a < ato; a++) {
+	  //determine whether just autocorrelation or also cross correlation (different atoms)
+	  double ngroup_lower = a;
+	  double ngroup_upper = a+1;
+	  if (type == CROSS || type == AUTOCROSS || type == UPPERCROSS){
+	    ngroup_lower = a;
+	    ngroup_upper = ngroup_glo;
+	  }
+	  for (b = ngroup_lower; b < ngroup_upper; b++) {
+	    if ((type == CROSS || type == UPPERCROSS) && a==b) continue;
 
-            //initialize counter for work distribution
-            //printf("%d\n",m);
-            int inda,indb;
-            if(memory_switch==PERATOM){
-              inda=indices_group[a];
-              indb=indices_group[b];
-            } else {
-              inda = a;
-              indb = b;
-            }
-            
-            // jump if not in range
-            if (variable_flag == VAR_DEPENDENED){
-              double dV = variable_store[inda][n] - variable_store[indb][n];
-              dV=fabs(dV);
-              if(dV>range) continue;
-            } 
-            if (variable_flag == DIST_DEPENDENED){
-              delx = variable_store[inda][n] -variable_store[indb][n];
-              dely = variable_store[inda][n+nsave]-variable_store[indb][n+nsave]  ;
-              delz = variable_store[inda][n+2*nsave]- variable_store[indb][n+2*nsave];
-              domain->minimum_image(delx,dely,delz);
-              rsq = delx*delx + dely*dely + delz*delz;
-              if(rsq>range2_cut) continue;
-            }
-            
-            // calc correlation
-      #ifdef TIME_PARA
-           m = lastindex - sample_start - kfrom;
-           if (m < 0) m = nsave+m;
-           for (k = sample_start+kfrom; k < sample_start+kto; k++) {
-      #else
-            m = lastindex;
-            for (k = 0; k < nsample; k++) {  
-      #endif
-              if (variable_flag == VAR_DEPENDENED){
-                double dV = variable_store[inda][m] - variable_store[indb][n];
-                dV=fabs(dV);
-                if(dV<range){
-                  ind = dV/range*bins;
-                  offset= k*bins+ind;
-                  double val0 = array[indb][j * nsave + n];
-                  double valt = array[inda][i * nsave + m];
-                  double cor = val0*valt;
-                  if (type == AUTOCROSS && b!=a) {
-                    if(i==0&&j==0) local_count[offset+corr_length/2]+=1.0;
-                    local_corr[offset+corr_length/2][ipair] += cor;
-                    local_corr_err[offset+corr_length/2][ipair] += cor*cor;
-                  } else {
-                    if(i==0&&j==0) {
-                      local_count[offset]+=1.0;
-                    }
-                    local_corr[offset][ipair]+=cor;
-                    local_corr_err[offset][ipair]+=cor*cor;
-                  }
-                }
-              } else if (variable_flag == DIST_DEPENDENED) {
-                delx = variable_store[inda][n] -variable_store[indb][n];
-                dely = variable_store[inda][n+nsave]-variable_store[indb][n+nsave]  ;
-                delz = variable_store[inda][n+2*nsave]- variable_store[indb][n+2*nsave];
-                domain->minimum_image(delx,dely,delz);
-                rsq = delx*delx + dely*dely + delz*delz;
-                dist = sqrt (rsq);
-                //if(dist < 6.0) {
-                //  printf("dist %d %d: %f\n",a,b,dist);
-                //}
-                if(dist<range){
-                  double disti = 1.0/dist;
-                  delx_t = variable_store[inda][m] -variable_store[indb][m];
-                  dely_t = variable_store[inda][m+nsave]-variable_store[indb][m+nsave]  ;
-                  delz_t = variable_store[inda][m+2*nsave]- variable_store[indb][m+2*nsave];
-                  domain->minimum_image(delx_t,dely_t,delz_t);
-                  dist_t = sqrt(delx_t*delx_t + dely_t*dely_t + delz_t*delz_t);
-                  double disti_t = 1.0/dist_t;
-                  delx_0 = variable_store[inda][n] -variable_store[indb][n];
-                  dely_0 = variable_store[inda][n+nsave]-variable_store[indb][n+nsave]  ;
-                  delz_0 = variable_store[inda][n+2*nsave]- variable_store[indb][n+2*nsave];
-                  domain->minimum_image(delx_0,dely_0,delz_0);
-                  dist_0 = sqrt(delx_0*delx_0 + dely_0*dely_0 + delz_0*delz_0);
-                  double disti_0 = 1.0/dist_0;
-                  //printf("%f %f %f\n",delx_0,delx_t,delx);
-                  if (cross_flag ==CROSSCOR) {
-                    if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && i >= nvalues_pg)) {
-                      fabx_t = array[inda*ngroup_glo+indb][ i*nsave + m];
-                      faby_t = array[inda*ngroup_glo+indb][ i*nsave + nsave + m];
-                      fabz_t = array[inda*ngroup_glo+indb][ i*nsave + 2*nsave + m];
-                    } else {
-                      fabx_t = array[inda][ i*nsave + m];
-                      faby_t = array[inda][ i*nsave + nsave + m];
-                      fabz_t = array[inda][ i*nsave + 2*nsave + m];
-                    }
-                    if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && j >= nvalues_pg)) {
-                      fabx_0 = array[inda*ngroup_glo+indb][ j*nsave + n];
-                      faby_0 = array[inda*ngroup_glo+indb][ j*nsave + nsave + n];
-                      fabz_0 = array[inda*ngroup_glo+indb][ j*nsave + 2*nsave + n];
-                    } else {
-                      fabx_0 = array[indb][ j*nsave + n];
-                      faby_0 = array[indb][ j*nsave + nsave + n];
-                      fabz_0 = array[indb][ j*nsave + 2*nsave + n];
-                    }
-                    } else if(cross_flag == DIFFCOR) {
-                    if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && i >= nvalues_pg)) {
-                      fabx_t = array[inda*ngroup_glo+indb][ i*nsave + m];
-                      faby_t = array[inda*ngroup_glo+indb][ i*nsave + nsave + m];
-                      fabz_t = array[inda*ngroup_glo+indb][ i*nsave + 2*nsave + m];
-                    } else {
-                      fabx_t = array[inda][ i*nsave + m] - array[indb][ i*nsave + m];
-                      faby_t = array[inda][ i*nsave + nsave + m] - array[indb][ i*nsave + nsave + m];
-                      fabz_t = array[inda][ i*nsave + 2*nsave + m] - array[indb][ i*nsave + 2*nsave + m];
-                    }
-                    if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && j >= nvalues_pg)) {
-                      fabx_0 = array[inda*ngroup_glo+indb][ j*nsave + n];
-                      faby_0 = array[inda*ngroup_glo+indb][ j*nsave + nsave + n];
-                      fabz_0 = array[inda*ngroup_glo+indb][ j*nsave + 2*nsave + n];
-                    } else {
-                      fabx_0 = array[inda][ j*nsave + n] - array[indb][ j*nsave + n];
-                      faby_0 = array[inda][ j*nsave + nsave + n] - array[indb][ j*nsave + nsave + n];
-                      fabz_0 = array[inda][ j*nsave + 2*nsave + n] - array[indb][ j*nsave + 2*nsave + n];
-                    }
-                  } else if(cross_flag == SELFCOR) {
-                    if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && i >= nvalues_pg)) {
-                      fabx_t = array[inda*ngroup_glo+indb][ i*nsave + m];
-                      faby_t = array[inda*ngroup_glo+indb][ i*nsave + nsave + m];
-                      fabz_t = array[inda*ngroup_glo+indb][ i*nsave + 2*nsave + m];
-                    } else {
-                      fabx_t = array[inda][ i*nsave + m];
-                      faby_t = array[inda][ i*nsave + nsave + m];
-                      fabz_t = array[inda][ i*nsave + 2*nsave + m];
-                    }
-                    if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && j >= nvalues_pg)) {
-                      fabx_0 = array[inda*ngroup_glo+indb][ j*nsave + n];
-                      faby_0 = array[inda*ngroup_glo+indb][ j*nsave + nsave + n];
-                      fabz_0 = array[inda*ngroup_glo+indb][ j*nsave + 2*nsave + n];
-                    } else {
-                      fabx_0 = array[inda][ j*nsave + n];
-                      faby_0 = array[inda][ j*nsave + nsave + n];
-                      fabz_0 = array[inda][ j*nsave + 2*nsave + n];
-                    }
-                  }
-                  
-                  // calculate radial component of the correlated quantity (mapped on the distance vector)
-                  fabr_t = (fabx_t*delx_t + faby_t*dely_t +fabz_t*delz_t) * disti_t;
-                  fabr_0 = (fabx_0*delx_0 + faby_0*dely_0 +fabz_0*delz_0) * disti_0;
-                  // calculate orthogonal component of the correlated quantity (mapped on the distance vector)
-                  //fabox_t0 = (fabx_t-fabr_t*delx_t*disti_t)*(fabx_0-fabr_0*delx_0*disti_0);
-                  //faboy_t0 = (faby_t-fabr_t*dely_t*disti_t)*(faby_0-fabr_0*dely_0*disti_0);
-                  //faboz_t0 = (fabz_t-fabr_t*delz_t*disti_t)*(fabz_0-fabr_0*delz_0*disti_0);
-                  
-                  ind = dist_0/range*bins;
-                  offset= k*bins+ind;
-                  if (fluc_flag) {
-                    //printf ("fluc_lower %d, fluc_upper %d\n",fluc_lower, fluc_upper);
-                    //if ( fluc_lower <= i +1 && i+1 <= fluc_upper && dist_t < range) fabr_t -= mean_fluc_data[ind_t];
-                    //if ( fluc_lower <= j +1 && j+1 <= fluc_upper && dist_0 < range) fabr_0 -= mean_fluc_data[ind_0];
-                  }
-            #ifdef TIME_PARA
-                  if(i==0&&j==0) local_count[offset]+=1.0;
-                  // parallel contribution
-                  local_corr[offset][ipair] += fabr_t*fabr_0;
-                  //if (fabr_t*fabr_0*fabr_t*fabr_0 < 0.0000000000001) printf("%d %d,offset %d, local_count[offset] %f,fabr_t %f, fabr_0 %f, delx_t %f,dely_t %f,delz_t %f,delx_0 %f,dely_0 %f,delz_0 %f,delx %f,dely %f,delz %f\n",n,m,offset,local_count[offset],fabr_t, fabr_0,delx_t,dely_t,delz_t,delx_0,dely_0,delz_0,delx,dely,delz);
-                  local_corr_err[offset][ipair] += fabr_t*fabr_0*fabr_t*fabr_0;
-                  // orthogonal contribution
-                  //local_corr[offset+corr_length/2][ipair] += fabox_t0+faboy_t0+faboz_t0;
-                  //if (fabr_t*fabr_0*fabr_t*fabr_0 < 0.0000000000001) printf("%d %d,offset %d, local_count[offset] %f,fabr_t %f, fabr_0 %f, delx_t %f,dely_t %f,delz_t %f,delx_0 %f,dely_0 %f,delz_0 %f,delx %f,dely %f,delz %f\n",n,m,offset,local_count[offset],fabr_t, fabr_0,delx_t,dely_t,delz_t,delx_0,dely_0,delz_0,delx,dely,delz);
-                  //local_corr_err[offset+corr_length/2][ipair] += (fabox_t0+faboy_t0+faboz_t0)*(fabox_t0+faboy_t0+faboz_t0);
-            #else
-                  if(i==0&&j==0) omp_local_count[offset]+=1.0;
-                  omp_local_corr[offset][ipair] += fabr_t*fabr_0;
-                  omp_local_corr_err[offset][ipair] += fabr_t*fabr_0*fabr_t*fabr_0;
-            #endif
-                }
-              } else { //no variable dependency
-                // since atoms are renamed, you have to access tag[i]
-                double val0 = array[indb][j * nsave + n];
-                double valt = array[inda][i * nsave + m];
-                //if (a==0) printf("%f %f\n",val0,valt);
-                double cor = val0*valt;
-                //printf("%d %f %f\n",n-m,valt,val0);
-                if (type == AUTOCROSS && b!=a) {
-                  if(i==0&&j==0) local_count[k+corr_length/2]+=1.0;
-                  local_corr[k+corr_length/2][ipair] += cor;
-                  local_corr_err[k+corr_length/2][ipair] += cor*cor;
-                } else {
-                  if(i==0&&j==0) local_count[k]+=1.0;
-                  local_corr[k][ipair]+= cor;
-                  local_corr_err[k][ipair]+= cor*cor;
-                      //if (k==0) printf("calc %d\n",ipair);
-                }
-              }
-              m--;
-              if (m < 0) m = nsave-1;
-            }
-          }	
-        }
-
-        ipair++;
+	    //initialize counter for work distribution
+	    //printf("%d\n",m);
+	    int inda,indb;
+	    if(memory_switch==PERATOM){
+	      inda=indices_group[a];
+	      indb=indices_group[b];
+	    } else {
+	      inda = a;
+	      indb = b;
+	    }
+	    
+	    // jump if not in range
+	    if (variable_flag == VAR_DEPENDENED){
+	      double dV = variable_store[inda][n] - variable_store[indb][n];
+	      dV=fabs(dV);
+	      if(dV>range) continue;
+	    } 
+	    if (variable_flag == DIST_DEPENDENED){
+	      delx = variable_store[inda][n] -variable_store[indb][n];
+	      dely = variable_store[inda][n+nsave]-variable_store[indb][n+nsave]  ;
+	      delz = variable_store[inda][n+2*nsave]- variable_store[indb][n+2*nsave];
+	      domain->minimum_image(delx,dely,delz);
+	      rsq = delx*delx + dely*dely + delz*delz;
+	      if(rsq>range2_cut) continue;
+	    }
+	    
+	    // calc correlation
+#ifdef TIME_PARA
+	    m = lastindex - sample_start - kfrom;
+	    if (m < 0) m = nsave+m;
+	    for (k = sample_start+kfrom; k < sample_start+kto; k++) {
+#else
+	    m = lastindex;
+	    for (k = 0; k < nsample; k++) {  
+#endif
+	      if (variable_flag == VAR_DEPENDENED){
+		double dV = variable_store[inda][m] - variable_store[indb][n];
+		dV=fabs(dV);
+		if(dV<range){
+		  ind = dV/range*bins;
+		  offset= k*bins+ind;
+		  double val0 = array[indb][j * nsave + n];
+		  double valt = array[inda][i * nsave + m];
+		  double cor = val0*valt;
+		  if (type == AUTOCROSS && b!=a) {
+		    if(i==0&&j==0) local_count[offset+corr_length/2]+=1.0;
+		    local_corr[offset+corr_length/2][ipair] += cor;
+		    local_corr_err[offset+corr_length/2][ipair] += cor*cor;
+		  } else {
+		    if(i==0&&j==0) {
+		      local_count[offset]+=1.0;
+		    }
+		    local_corr[offset][ipair]+=cor;
+		    local_corr_err[offset][ipair]+=cor*cor;
+		  }
+		}
+	      } else if (variable_flag == DIST_DEPENDENED) {
+		delx = variable_store[inda][n] -variable_store[indb][n];
+		dely = variable_store[inda][n+nsave]-variable_store[indb][n+nsave]  ;
+		delz = variable_store[inda][n+2*nsave]- variable_store[indb][n+2*nsave];
+		domain->minimum_image(delx,dely,delz);
+		rsq = delx*delx + dely*dely + delz*delz;
+		dist = sqrt (rsq);
+		//if(dist < 6.0) {
+		//  printf("dist %d %d: %f\n",a,b,dist);
+		//}
+		if(dist<range){
+		  double disti = 1.0/dist;
+		  delx_t = variable_store[inda][m] -variable_store[indb][m];
+		  dely_t = variable_store[inda][m+nsave]-variable_store[indb][m+nsave]  ;
+		  delz_t = variable_store[inda][m+2*nsave]- variable_store[indb][m+2*nsave];
+		  domain->minimum_image(delx_t,dely_t,delz_t);
+		  dist_t = sqrt(delx_t*delx_t + dely_t*dely_t + delz_t*delz_t);
+		  double disti_t = 1.0/dist_t;
+		  delx_0 = variable_store[inda][n] -variable_store[indb][n];
+		  dely_0 = variable_store[inda][n+nsave]-variable_store[indb][n+nsave]  ;
+		  delz_0 = variable_store[inda][n+2*nsave]- variable_store[indb][n+2*nsave];
+		  domain->minimum_image(delx_0,dely_0,delz_0);
+		  dist_0 = sqrt(delx_0*delx_0 + dely_0*dely_0 + delz_0*delz_0);
+		  double disti_0 = 1.0/dist_0;
+		  //printf("%f %f %f\n",delx_0,delx_t,delx);
+		  if (cross_flag ==CROSSCOR) {
+		    if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && i >= nvalues_pg)) {
+		      fabx_t = array[inda*ngroup_glo+indb][ i*nsave + m];
+		      faby_t = array[inda*ngroup_glo+indb][ i*nsave + nsave + m];
+		      fabz_t = array[inda*ngroup_glo+indb][ i*nsave + 2*nsave + m];
+		    } else {
+		      fabx_t = array[inda][ i*nsave + m];
+		      faby_t = array[inda][ i*nsave + nsave + m];
+		      fabz_t = array[inda][ i*nsave + 2*nsave + m];
+		    }
+		    if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && j >= nvalues_pg)) {
+		      fabx_0 = array[inda*ngroup_glo+indb][ j*nsave + n];
+		      faby_0 = array[inda*ngroup_glo+indb][ j*nsave + nsave + n];
+		      fabz_0 = array[inda*ngroup_glo+indb][ j*nsave + 2*nsave + n];
+		    } else {
+		      fabx_0 = array[indb][ j*nsave + n];
+		      faby_0 = array[indb][ j*nsave + nsave + n];
+		      fabz_0 = array[indb][ j*nsave + 2*nsave + n];
+		    }
+		    } else if(cross_flag == DIFFCOR) {
+		    if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && i >= nvalues_pg)) {
+		      fabx_t = array[inda*ngroup_glo+indb][ i*nsave + m];
+		      faby_t = array[inda*ngroup_glo+indb][ i*nsave + nsave + m];
+		      fabz_t = array[inda*ngroup_glo+indb][ i*nsave + 2*nsave + m];
+		    } else {
+		      fabx_t = array[inda][ i*nsave + m] - array[indb][ i*nsave + m];
+		      faby_t = array[inda][ i*nsave + nsave + m] - array[indb][ i*nsave + nsave + m];
+		      fabz_t = array[inda][ i*nsave + 2*nsave + m] - array[indb][ i*nsave + 2*nsave + m];
+		    }
+		    if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && j >= nvalues_pg)) {
+		      fabx_0 = array[inda*ngroup_glo+indb][ j*nsave + n];
+		      faby_0 = array[inda*ngroup_glo+indb][ j*nsave + nsave + n];
+		      fabz_0 = array[inda*ngroup_glo+indb][ j*nsave + 2*nsave + n];
+		    } else {
+		      fabx_0 = array[inda][ j*nsave + n] - array[indb][ j*nsave + n];
+		      faby_0 = array[inda][ j*nsave + nsave + n] - array[indb][ j*nsave + nsave + n];
+		      fabz_0 = array[inda][ j*nsave + 2*nsave + n] - array[indb][ j*nsave + 2*nsave + n];
+		    }
+		  } else if(cross_flag == SELFCOR) {
+		    if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && i >= nvalues_pg)) {
+		      fabx_t = array[inda*ngroup_glo+indb][ i*nsave + m];
+		      faby_t = array[inda*ngroup_glo+indb][ i*nsave + nsave + m];
+		      fabz_t = array[inda*ngroup_glo+indb][ i*nsave + 2*nsave + m];
+		    } else {
+		      fabx_t = array[inda][ i*nsave + m];
+		      faby_t = array[inda][ i*nsave + nsave + m];
+		      fabz_t = array[inda][ i*nsave + 2*nsave + m];
+		    }
+		    if (memory_switch==PERPAIR || (memory_switch == PERGROUP_PERPAIR && j >= nvalues_pg)) {
+		      fabx_0 = array[inda*ngroup_glo+indb][ j*nsave + n];
+		      faby_0 = array[inda*ngroup_glo+indb][ j*nsave + nsave + n];
+		      fabz_0 = array[inda*ngroup_glo+indb][ j*nsave + 2*nsave + n];
+		    } else {
+		      fabx_0 = array[inda][ j*nsave + n];
+		      faby_0 = array[inda][ j*nsave + nsave + n];
+		      fabz_0 = array[inda][ j*nsave + 2*nsave + n];
+		    }
+		  }
+		  
+		  // calculate radial component of the correlated quantity (mapped on the distance vector)
+		  fabr_t = (fabx_t*delx_t + faby_t*dely_t +fabz_t*delz_t) * disti_t;
+		  fabr_0 = (fabx_0*delx_0 + faby_0*dely_0 +fabz_0*delz_0) * disti_0;
+		  // calculate orthogonal component of the correlated quantity (mapped on the distance vector)
+		  //fabox_t0 = (fabx_t-fabr_t*delx_t*disti_t)*(fabx_0-fabr_0*delx_0*disti_0);
+		  //faboy_t0 = (faby_t-fabr_t*dely_t*disti_t)*(faby_0-fabr_0*dely_0*disti_0);
+		  //faboz_t0 = (fabz_t-fabr_t*delz_t*disti_t)*(fabz_0-fabr_0*delz_0*disti_0);
+		  
+		  ind = dist_0/range*bins;
+		  offset= k*bins+ind;
+		  if (fluc_flag) {
+		    //printf ("fluc_lower %d, fluc_upper %d\n",fluc_lower, fluc_upper);
+		    //if ( fluc_lower <= i +1 && i+1 <= fluc_upper && dist_t < range) fabr_t -= mean_fluc_data[ind_t];
+		    //if ( fluc_lower <= j +1 && j+1 <= fluc_upper && dist_0 < range) fabr_0 -= mean_fluc_data[ind_0];
+		  }
+#ifdef TIME_PARA
+		  if(i==0&&j==0) local_count[offset]+=1.0;
+		  // parallel contribution
+		  local_corr[offset][ipair] += fabr_t*fabr_0;
+		  //if (fabr_t*fabr_0*fabr_t*fabr_0 < 0.0000000000001) printf("%d %d,offset %d, local_count[offset] %f,fabr_t %f, fabr_0 %f, delx_t %f,dely_t %f,delz_t %f,delx_0 %f,dely_0 %f,delz_0 %f,delx %f,dely %f,delz %f\n",n,m,offset,local_count[offset],fabr_t, fabr_0,delx_t,dely_t,delz_t,delx_0,dely_0,delz_0,delx,dely,delz);
+		  local_corr_err[offset][ipair] += fabr_t*fabr_0*fabr_t*fabr_0;
+		  // orthogonal contribution
+		  //local_corr[offset+corr_length/2][ipair] += fabox_t0+faboy_t0+faboz_t0;
+		  //if (fabr_t*fabr_0*fabr_t*fabr_0 < 0.0000000000001) printf("%d %d,offset %d, local_count[offset] %f,fabr_t %f, fabr_0 %f, delx_t %f,dely_t %f,delz_t %f,delx_0 %f,dely_0 %f,delz_0 %f,delx %f,dely %f,delz %f\n",n,m,offset,local_count[offset],fabr_t, fabr_0,delx_t,dely_t,delz_t,delx_0,dely_0,delz_0,delx,dely,delz);
+		  //local_corr_err[offset+corr_length/2][ipair] += (fabox_t0+faboy_t0+faboz_t0)*(fabox_t0+faboy_t0+faboz_t0);
+#else
+		  if(i==0&&j==0) omp_local_count[offset]+=1.0;
+		  omp_local_corr[offset][ipair] += fabr_t*fabr_0;
+		  omp_local_corr_err[offset][ipair] += fabr_t*fabr_0*fabr_t*fabr_0;
+#endif
+		}
+	      } else { //no variable dependency
+		// since atoms are renamed, you have to access tag[i]
+		double val0 = array[indb][j * nsave + n];
+		double valt = array[inda][i * nsave + m];
+		//if (a==0) printf("%f %f\n",val0,valt);
+		double cor = val0*valt;
+		//printf("%d %f %f\n",n-m,valt,val0);
+		if (type == AUTOCROSS && b!=a) {
+		  if(i==0&&j==0) local_count[k+corr_length/2]+=1.0;
+		  local_corr[k+corr_length/2][ipair] += cor;
+		  local_corr_err[k+corr_length/2][ipair] += cor*cor;
+		} else {
+		  if(i==0&&j==0) local_count[k]+=1.0;
+		  local_corr[k][ipair]+= cor;
+		  local_corr_err[k][ipair]+= cor*cor;
+		}
+	      }
+	      m--;
+	      if (m < 0) m = nsave-1;
+	    }
+	  }	
+	}
       }
+      ipair++;
     }
     // parallel section finished. Reduction necessary now
 #ifndef TIME_PARA
@@ -1786,7 +1779,7 @@ void FixAveCorrelatePeratom::accumulate(int *indices_group, int ngroup_loc)
 	local_count[i] += omp_local_count[i];
 	for (j = 0; j < npair; j++){
 	  local_corr[i][j] += omp_local_corr[i][j];
-	  local_corr_err[i][j] += omp_local_corr_err[i][j];
+	  local_corr_err[i][j] = omp_local_corr_err[i][j];
 	}
       }
     }

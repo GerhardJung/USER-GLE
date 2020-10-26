@@ -1,6 +1,6 @@
 /* ----------------------------------------------------------------------
    LAMMPS - Large-scale Atomic/Molecular Massively Parallel Simulator
-   http://lammps.sandia.gov, Sandia National Laboratories
+   https://lammps.sandia.gov/, Sandia National Laboratories
    Steve Plimpton, sjplimp@sandia.gov
 
    Copyright (2003) Sandia Corporation.  Under the terms of Contract
@@ -11,42 +11,46 @@
    See the README file in the top-level LAMMPS directory.
 ------------------------------------------------------------------------- */
 
-#include <math.h>
-#include <stdlib.h>
-#include <string.h>
+/* ----------------------------------------------------------------------
+   Contributing author (ratio and subset) : Jake Gissinger (U Colorado)
+------------------------------------------------------------------------- */
+
 #include "create_atoms.h"
+
 #include "atom.h"
 #include "atom_vec.h"
-#include "molecule.h"
 #include "comm.h"
-#include "irregular.h"
-#include "modify.h"
-#include "force.h"
-#include "special.h"
-#include "fix.h"
-#include "compute.h"
 #include "domain.h"
-#include "lattice.h"
-#include "region.h"
-#include "input.h"
-#include "variable.h"
-#include "random_park.h"
-#include "random_mars.h"
-#include "math_extra.h"
-#include "math_const.h"
 #include "error.h"
+#include "input.h"
+#include "irregular.h"
+#include "lattice.h"
+#include "math_const.h"
+#include "math_extra.h"
+#include "memory.h"
+#include "modify.h"
+#include "molecule.h"
+#include "random_mars.h"
+#include "random_park.h"
+#include "region.h"
+#include "special.h"
+#include "variable.h"
+
+#include <cstring>
 
 using namespace LAMMPS_NS;
 using namespace MathConst;
 
 #define BIG 1.0e30
 #define EPSILON 1.0e-6
+#define LB_FACTOR 1.1
 #define PI 3.1415926
 #define DIV_ROUND_CLOSEST(n, d) ((((n) < 0) ^ ((d) < 0)) ? (((n) - (d)/2)/(d)) : (((n) + (d)/2)/(d)))
 
 enum{BOX,REGION,SINGLE,RANDOM, SINGLESPHERE};
 enum{ATOM,MOLECULE};
-enum{LAYOUT_UNIFORM,LAYOUT_NONUNIFORM,LAYOUT_TILED};    // several files
+enum{COUNT,INSERT,INSERT_SELECTED};
+enum{NONE,RATIO,SUBSET};
 
 /* ---------------------------------------------------------------------- */
 
@@ -56,21 +60,39 @@ CreateAtoms::CreateAtoms(LAMMPS *lmp) : Pointers(lmp) {}
 
 void CreateAtoms::command(int narg, char **arg)
 {
+  MPI_Comm_rank(world,&me);
+  MPI_Comm_size(world,&nprocs);
+
   if (domain->box_exist == 0)
     error->all(FLERR,"Create_atoms command before simulation box is defined");
   if (modify->nfix_restart_peratom)
     error->all(FLERR,"Cannot create_atoms after "
                "reading restart file with per-atom info");
 
+  // check for compatible lattice
+
+  int latsty = domain->lattice->style;
+  if (domain->dimension == 2) {
+    if (latsty == Lattice::SC || latsty == Lattice::BCC
+        || latsty == Lattice::FCC || latsty == Lattice::HCP
+        || latsty == Lattice::DIAMOND)
+      error->all(FLERR,"Lattice style incompatible with simulation dimension");
+  } else {
+    if (latsty == Lattice::SQ ||latsty == Lattice::SQ2
+        || latsty == Lattice::HEX)
+      error->all(FLERR,"Lattice style incompatible with simulation dimension");
+  }
+
   // parse arguments
 
   if (narg < 2) error->all(FLERR,"Illegal create_atoms command");
-  ntype = force->inumeric(FLERR,arg[0]);
+  ntype = utils::inumeric(FLERR,arg[0],false,lmp);
 
   int iarg;
   if (strcmp(arg[1],"box") == 0) {
     style = BOX;
     iarg = 2;
+    nregion = -1;
   } else if (strcmp(arg[1],"region") == 0) {
     style = REGION;
     if (narg < 3) error->all(FLERR,"Illegal create_atoms command");
@@ -83,24 +105,24 @@ void CreateAtoms::command(int narg, char **arg)
   } else if (strcmp(arg[1],"single") == 0) {
     style = SINGLE;
     if (narg < 5) error->all(FLERR,"Illegal create_atoms command");
-    xone[0] = force->numeric(FLERR,arg[2]);
-    xone[1] = force->numeric(FLERR,arg[3]);
-    xone[2] = force->numeric(FLERR,arg[4]);
+    xone[0] = utils::numeric(FLERR,arg[2],false,lmp);
+    xone[1] = utils::numeric(FLERR,arg[3],false,lmp);
+    xone[2] = utils::numeric(FLERR,arg[4],false,lmp);
     iarg = 5;
   } else if (strcmp(arg[1],"single/sphere") == 0) {
     style = SINGLESPHERE;
     if (narg < 7) error->all(FLERR,"Illegal create_atoms command");
-    xone[0] = force->numeric(FLERR,arg[2]);
-    xone[1] = force->numeric(FLERR,arg[3]);
-    xone[2] = force->numeric(FLERR,arg[4]);
-    rad = force->numeric(FLERR,arg[5]);
-    nsphere = force->inumeric(FLERR,arg[6]);
+    xone[0] = utils::numeric(FLERR,arg[2],false,lmp);
+    xone[1] = utils::numeric(FLERR,arg[3],false,lmp);
+    xone[2] = utils::numeric(FLERR,arg[4],false,lmp);
+    rad = utils::numeric(FLERR,arg[5],false,lmp);
+    nsphere = utils::inumeric(FLERR,arg[6],false,lmp);
     iarg = 7;
   } else if (strcmp(arg[1],"random") == 0) {
     style = RANDOM;
     if (narg < 5) error->all(FLERR,"Illegal create_atoms command");
-    nrandom = force->inumeric(FLERR,arg[2]);
-    seed = force->inumeric(FLERR,arg[3]);
+    nrandom = utils::inumeric(FLERR,arg[2],false,lmp);
+    seed = utils::inumeric(FLERR,arg[3],false,lmp);
     if (strcmp(arg[4],"NULL") == 0) nregion = -1;
     else {
       nregion = domain->find_region(arg[4]);
@@ -119,8 +141,10 @@ void CreateAtoms::command(int narg, char **arg)
   mode = ATOM;
   int molseed;
   varflag = 0;
-  vstr = xstr = ystr = zstr = NULL;
+  vstr = xstr = ystr = zstr = nullptr;
   quatone[0] = quatone[1] = quatone[2] = 0.0;
+  subsetflag = NONE;
+  int subsetseed;
 
   nbasis = domain->lattice->nbasis;
   basistype = new int[nbasis];
@@ -129,8 +153,8 @@ void CreateAtoms::command(int narg, char **arg)
   while (iarg < narg) {
     if (strcmp(arg[iarg],"basis") == 0) {
       if (iarg+3 > narg) error->all(FLERR,"Illegal create_atoms command");
-      int ibasis = force->inumeric(FLERR,arg[iarg+1]);
-      int itype = force->inumeric(FLERR,arg[iarg+2]);
+      int ibasis = utils::inumeric(FLERR,arg[iarg+1],false,lmp);
+      int itype = utils::inumeric(FLERR,arg[iarg+2],false,lmp);
       if (ibasis <= 0 || ibasis > nbasis || itype <= 0 || itype > atom->ntypes)
         error->all(FLERR,"Invalid basis setting in create_atoms command");
       basistype[ibasis-1] = itype;
@@ -146,12 +170,12 @@ void CreateAtoms::command(int narg, char **arg)
       int imol = atom->find_molecule(arg[iarg+1]);
       if (imol == -1) error->all(FLERR,"Molecule template ID for "
                                  "create_atoms does not exist");
-      if (atom->molecules[imol]->nset > 1 && comm->me == 0)
+      if (atom->molecules[imol]->nset > 1 && me == 0)
         error->warning(FLERR,"Molecule template for "
                        "create_atoms has multiple molecules");
       mode = MOLECULE;
       onemol = atom->molecules[imol];
-      molseed = force->inumeric(FLERR,arg[iarg+2]);
+      molseed = utils::inumeric(FLERR,arg[iarg+2],false,lmp);
       iarg += 3;
     } else if (strcmp(arg[iarg],"units") == 0) {
       if (iarg+2 > narg) error->all(FLERR,"Illegal create_atoms command");
@@ -187,15 +211,13 @@ void CreateAtoms::command(int narg, char **arg)
       } else error->all(FLERR,"Illegal create_atoms command");
       iarg += 3;
     } else if (strcmp(arg[iarg],"rotate") == 0) {
-      if (style != SINGLE)
-        error->all(FLERR,"Cannot use create_atoms rotate unless single style");
       if (iarg+5 > narg) error->all(FLERR,"Illegal create_atoms command");
       double thetaone;
       double axisone[3];
-      thetaone = force->numeric(FLERR,arg[iarg+1]);
-      axisone[0] = force->numeric(FLERR,arg[iarg+2]);
-      axisone[1] = force->numeric(FLERR,arg[iarg+3]);
-      axisone[2] = force->numeric(FLERR,arg[iarg+4]);
+      thetaone = utils::numeric(FLERR,arg[iarg+1],false,lmp) / 180.0 * MY_PI;;
+      axisone[0] = utils::numeric(FLERR,arg[iarg+2],false,lmp);
+      axisone[1] = utils::numeric(FLERR,arg[iarg+3],false,lmp);
+      axisone[2] = utils::numeric(FLERR,arg[iarg+4],false,lmp);
       if (axisone[0] == 0.0 && axisone[1] == 0.0 && axisone[2] == 0.0)
         error->all(FLERR,"Illegal create_atoms command");
       if (domain->dimension == 2 && (axisone[0] != 0.0 || axisone[1] != 0.0))
@@ -203,6 +225,22 @@ void CreateAtoms::command(int narg, char **arg)
       MathExtra::norm3(axisone);
       MathExtra::axisangle_to_quat(axisone,thetaone,quatone);
       iarg += 5;
+    } else if (strcmp(arg[iarg],"ratio") == 0) {
+      if (iarg+3 > narg) error->all(FLERR,"Illegal create_atoms command");
+      subsetflag = RATIO;
+      subsetfrac = utils::numeric(FLERR,arg[iarg+1],false,lmp);
+      subsetseed = utils::inumeric(FLERR,arg[iarg+2],false,lmp);
+      if (subsetfrac <= 0.0 || subsetfrac > 1.0 || subsetseed <= 0)
+        error->all(FLERR,"Illegal create_atoms command");
+      iarg += 3;
+    } else if (strcmp(arg[iarg],"subset") == 0) {
+      if (iarg+3 > narg) error->all(FLERR,"Illegal create_atoms command");
+      subsetflag = SUBSET;
+      nsubset = utils::bnumeric(FLERR,arg[iarg+1],false,lmp);
+      subsetseed = utils::inumeric(FLERR,arg[iarg+2],false,lmp);
+      if (nsubset <= 0 || subsetseed <= 0)
+        error->all(FLERR,"Illegal create_atoms command");
+      iarg += 3;
     } else error->all(FLERR,"Illegal create_atoms command");
   }
 
@@ -218,7 +256,7 @@ void CreateAtoms::command(int narg, char **arg)
 
   // error check and further setup for mode = MOLECULE
 
-  ranmol = NULL;
+  ranmol = nullptr;
   if (mode == MOLECULE) {
     if (onemol->xflag == 0)
       error->all(FLERR,"Create_atoms molecule must have coordinates");
@@ -237,11 +275,13 @@ void CreateAtoms::command(int narg, char **arg)
 
     // molecule random number generator, different for each proc
 
-    ranmol = new RanMars(lmp,molseed+comm->me);
+    ranmol = new RanMars(lmp,molseed+me);
   }
 
+  ranlatt = nullptr;
+  if (subsetflag != NONE) ranlatt = new RanMars(lmp,subsetseed+me);
+
   // error check and further setup for variable test
-  // save local copy of each equal variable string so can restore at end
 
   if (!vstr && (xstr || ystr || zstr))
     error->all(FLERR,"Incomplete use of variables in create_atoms command");
@@ -326,7 +366,7 @@ void CreateAtoms::command(int narg, char **arg)
   }
 
   if (style == BOX || style == REGION) {
-    if (comm->layout != LAYOUT_TILED) {
+    if (comm->layout != Comm::LAYOUT_TILED) {
       if (domain->xperiodic) {
         if (comm->myloc[0] == 0) sublo[0] -= epsilon[0];
         if (comm->myloc[0] == comm->procgrid[0]-1) subhi[0] -= 2.0*epsilon[0];
@@ -355,6 +395,11 @@ void CreateAtoms::command(int narg, char **arg)
     }
   }
 
+  // Record wall time for atom creation
+
+  MPI_Barrier(world);
+  double time1 = MPI_Wtime();
+
   // clear ghost count and any ghost bonus data internal to AtomVec
   // same logic as beginning of Comm::exchange()
   // do it now b/c creating atoms will overwrite ghost atoms
@@ -368,12 +413,12 @@ void CreateAtoms::command(int narg, char **arg)
   int nlocal_previous = atom->nlocal;
 
   if (style == SINGLE) add_single();
-  else if (style == SINGLESPHERE) add_singlesphere();
+    else if (style == SINGLESPHERE) add_singlesphere();
   else if (style == RANDOM) add_random();
   else add_lattice();
 
   // init per-atom fix/compute/variable values for created atoms
-  
+
   atom->data_fix_compute_variable(nlocal_previous,atom->nlocal);
 
   // set new total # of atoms and error check
@@ -392,7 +437,7 @@ void CreateAtoms::command(int narg, char **arg)
   // if global map exists, reset it
   // invoke map_init() b/c atom count has grown
 
-  if (atom->map_style) {
+  if (atom->map_style != Atom::MAP_NONE) {
     atom->map_init();
     atom->map_set();
   }
@@ -471,11 +516,17 @@ void CreateAtoms::command(int narg, char **arg)
     for (int i = 0; i < molcreate; i++) {
       if (tag) offset = tag[ilocal]-1;
       for (int m = 0; m < natoms; m++) {
-        if (molecule_flag) molecule[ilocal] = moloffset + i+1;
-        if (molecular == 2) {
+        if (molecule_flag) {
+          if (onemol->moleculeflag) {
+            molecule[ilocal] = moloffset + onemol->molecule[m];
+          } else {
+            molecule[ilocal] = moloffset + 1;
+          }
+        }
+        if (molecular == Atom::TEMPLATE) {
           atom->molindex[ilocal] = 0;
           atom->molatom[ilocal] = m;
-        } else if (molecular) {
+        } else if (molecular != Atom::ATOMIC) {
           if (onemol->bondflag)
             for (int j = 0; j < num_bond[ilocal]; j++)
               bond_atom[ilocal][j] += offset;
@@ -505,6 +556,13 @@ void CreateAtoms::command(int narg, char **arg)
         }
         ilocal++;
       }
+      if (molecule_flag) {
+        if (onemol->moleculeflag) {
+          moloffset += onemol->nmolecules;
+        } else {
+          moloffset++;
+        }
+      }
     }
 
     // perform irregular comm to migrate atoms to new owning procs
@@ -525,22 +583,13 @@ void CreateAtoms::command(int narg, char **arg)
   // clean up
 
   delete ranmol;
+  delete ranlatt;
+
   if (domain->lattice) delete [] basistype;
   delete [] vstr;
   delete [] xstr;
   delete [] ystr;
   delete [] zstr;
-
-  // print status
-
-  if (comm->me == 0) {
-    if (screen)
-      fprintf(screen,"Created " BIGINT_FORMAT " atoms\n",
-              atom->natoms-natoms_previous);
-    if (logfile)
-      fprintf(logfile,"Created " BIGINT_FORMAT " atoms\n",
-              atom->natoms-natoms_previous);
-  }
 
   // for MOLECULE mode:
   // create special bond lists for molecular systems,
@@ -548,11 +597,21 @@ void CreateAtoms::command(int narg, char **arg)
   // only if onemol added bonds but not special info
 
   if (mode == MOLECULE) {
-    if (atom->molecular == 1 && onemol->bondflag && !onemol->specialflag) {
+    if (atom->molecular == Atom::MOLECULAR && onemol->bondflag && !onemol->specialflag) {
       Special special(lmp);
       special.build();
+
     }
   }
+
+  // print status
+
+  MPI_Barrier(world);
+  if (me == 0)
+    utils::logmesg(lmp, fmt::format("Created {} atoms\n"
+                        "  create_atoms CPU = {:.3f} seconds\n",
+                        atom->natoms - natoms_previous,
+                        MPI_Wtime() - time1));
 }
 
 /* ----------------------------------------------------------------------
@@ -571,10 +630,20 @@ void CreateAtoms::add_single()
   }
 
   // if triclinic, convert to lamda coords (0-1)
+  // with remapflag set and periodic dims,
+  //   resulting coord must satisfy 0.0 <= coord < 1.0
 
   double lamda[3],*coord;
   if (triclinic) {
     domain->x2lamda(xone,lamda);
+    if (remapflag) {
+      if (domain->xperiodic && (lamda[0] < 0.0 || lamda[0] >= 1.0))
+        lamda[0] = 0.0;
+      if (domain->yperiodic && (lamda[1] < 0.0 || lamda[1] >= 1.0))
+        lamda[1] = 0.0;
+      if (domain->zperiodic && (lamda[2] < 0.0 || lamda[2] >= 1.0))
+        lamda[2] = 0.0;
+    }
     coord = lamda;
   } else coord = xone;
 
@@ -626,8 +695,8 @@ void CreateAtoms::add_singlesphere()
   }
   if (count != nsphere)
     error->warning(FLERR,"Number of atoms created not equal to desired value. Change value if necessary.");
-  
 }
+  
 
 /* ----------------------------------------------------------------------
    add Nrandom atoms at random locations
@@ -640,8 +709,11 @@ void CreateAtoms::add_random()
   double *boxlo,*boxhi;
 
   // random number generator, same for all procs
+  // warm up the generator 30x to avoid correlations in first-particle
+  // positions if runs are repeated with consecutive seeds
 
   RanPark *random = new RanPark(lmp,seed);
+  for (int ii=0; ii < 30; ii++) random->uniform();
 
   // bounding box for atom creation
   // in real units, even if triclinic
@@ -707,7 +779,9 @@ void CreateAtoms::add_random()
         coord[1] >= sublo[1] && coord[1] < subhi[1] &&
         coord[2] >= sublo[2] && coord[2] < subhi[2]) {
       if (mode == ATOM) atom->avec->create_atom(ntype,xone);
-      else add_molecule(xone);
+      else if (quatone[0] == 0 && quatone[1] == 0 && quatone[2] == 0)
+        add_molecule(xone);
+      else add_molecule(xone, quatone);
     }
   }
 
@@ -735,10 +809,31 @@ void CreateAtoms::add_lattice()
     bboxlo[2] = domain->sublo[2]; bboxhi[2] = domain->subhi[2];
   } else domain->bbox(domain->sublo_lamda,domain->subhi_lamda,bboxlo,bboxhi);
 
+  // narrow down the subbox by the bounding box of the given region, if available.
+  // for small regions in large boxes, this can result in a significant speedup
+
+  if ((style == REGION) && domain->regions[nregion]->bboxflag) {
+
+    const double rxmin = domain->regions[nregion]->extent_xlo;
+    const double rxmax = domain->regions[nregion]->extent_xhi;
+    const double rymin = domain->regions[nregion]->extent_ylo;
+    const double rymax = domain->regions[nregion]->extent_yhi;
+    const double rzmin = domain->regions[nregion]->extent_zlo;
+    const double rzmax = domain->regions[nregion]->extent_zhi;
+
+    if (rxmin > bboxlo[0]) bboxlo[0] = (rxmin > bboxhi[0]) ? bboxhi[0] : rxmin;
+    if (rxmax < bboxhi[0]) bboxhi[0] = (rxmax < bboxlo[0]) ? bboxlo[0] : rxmax;
+    if (rymin > bboxlo[1]) bboxlo[1] = (rymin > bboxhi[1]) ? bboxhi[1] : rymin;
+    if (rymax < bboxhi[1]) bboxhi[1] = (rymax < bboxlo[1]) ? bboxlo[1] : rymax;
+    if (rzmin > bboxlo[2]) bboxlo[2] = (rzmin > bboxhi[2]) ? bboxhi[2] : rzmin;
+    if (rzmax < bboxhi[2]) bboxhi[2] = (rzmax < bboxlo[2]) ? bboxlo[2] : rzmax;
+  }
+
   double xmin,ymin,zmin,xmax,ymax,zmax;
   xmin = ymin = zmin = BIG;
   xmax = ymax = zmax = -BIG;
 
+  // convert to lattice coordinates and set bounding box
   domain->lattice->bbox(1,bboxlo[0],bboxlo[1],bboxlo[2],
                         xmin,ymin,zmin,xmax,ymax,zmax);
   domain->lattice->bbox(1,bboxhi[0],bboxlo[1],bboxlo[2],
@@ -765,7 +860,6 @@ void CreateAtoms::add_lattice()
   //   which can lead to missing atoms in rare cases
   // extra decrement of lo if min < 0, since static_cast(-1.5) = -1
 
-  int ilo,ihi,jlo,jhi,klo,khi;
   ilo = static_cast<int> (xmin) - 1;
   jlo = static_cast<int> (ymin) - 1;
   klo = static_cast<int> (zmin) - 1;
@@ -777,20 +871,79 @@ void CreateAtoms::add_lattice()
   if (ymin < 0.0) jlo--;
   if (zmin < 0.0) klo--;
 
-  // iterate on 3d periodic lattice of unit cells using loop bounds
-  // iterate on nbasis atoms in each unit cell
-  // convert lattice coords to box coords
-  // add atom or molecule (on each basis point) if it meets all criteria
+  // count lattice sites on each proc
 
-  double **basis = domain->lattice->basis;
-  double x[3],lamda[3];
-  double *coord;
+  nlatt_overflow = 0;
+  loop_lattice(COUNT);
 
+  // nadd = # of atoms each proc will insert (estimated if subsetflag)
+
+  int overflow;
+  MPI_Allreduce(&nlatt_overflow,&overflow,1,MPI_INT,MPI_SUM,world);
+  if (overflow)
+    error->all(FLERR,"Create_atoms lattice size overflow on 1 or more procs");
+
+  bigint nadd;
+
+  if (subsetflag == NONE) {
+    if (nprocs == 1) nadd = nlatt;
+    else nadd = static_cast<bigint> (LB_FACTOR * nlatt);
+  } else {
+    bigint bnlatt = nlatt;
+    bigint bnlattall;
+    MPI_Allreduce(&bnlatt,&bnlattall,1,MPI_LMP_BIGINT,MPI_SUM,world);
+    if (subsetflag == RATIO)
+      nsubset = static_cast<bigint> (subsetfrac * bnlattall);
+    if (nsubset > bnlattall)
+      error->all(FLERR,"Create_atoms subset size > # of lattice sites");
+    if (nprocs == 1) nadd = nsubset;
+    else nadd = static_cast<bigint> (LB_FACTOR * nsubset/bnlattall * nlatt);
+  }
+
+  // allocate atom arrays to size N, rounded up by AtomVec->DELTA
+
+  bigint nbig = atom->avec->roundup(nadd + atom->nlocal);
+  int n = static_cast<int> (nbig);
+  atom->avec->grow(n);
+
+  // add atoms or molecules
+  // if no subset: add to all lattice sites
+  // if subset: count lattice sites, select random subset, then add
+
+  if (subsetflag == NONE) loop_lattice(INSERT);
+  else {
+    memory->create(flag,nlatt,"create_atoms:flag");
+    memory->create(next,nlatt,"create_atoms:next");
+    ranlatt->select_subset(nsubset,nlatt,flag,next);
+    loop_lattice(INSERT_SELECTED);
+    memory->destroy(flag);
+    memory->destroy(next);
+  }
+}
+
+/* ----------------------------------------------------------------------
+   iterate on 3d periodic lattice of unit cells using loop bounds
+   iterate on nbasis atoms in each unit cell
+   convert lattice coords to box coords
+   check if lattice point meets all criteria to be added
+   perform action on atom or molecule (on each basis point) if meets all criteria
+   actions = add, count, add if flagged
+------------------------------------------------------------------------- */
+
+void CreateAtoms::loop_lattice(int action)
+{
   int i,j,k,m;
-  for (k = klo; k <= khi; k++)
-    for (j = jlo; j <= jhi; j++)
-      for (i = ilo; i <= ihi; i++)
+
+  const double * const * const basis = domain->lattice->basis;
+
+  nlatt = 0;
+
+  for (k = klo; k <= khi; k++) {
+    for (j = jlo; j <= jhi; j++) {
+      for (i = ilo; i <= ihi; i++) {
         for (m = 0; m < nbasis; m++) {
+          double *coord;
+          double x[3],lamda[3];
 
           x[0] = i + basis[m][0];
           x[1] = j + basis[m][1];
@@ -820,11 +973,29 @@ void CreateAtoms::add_lattice()
               coord[1] < sublo[1] || coord[1] >= subhi[1] ||
               coord[2] < sublo[2] || coord[2] >= subhi[2]) continue;
 
-          // add the atom or entire molecule to my list of atoms
+          // this proc owns the lattice site
+          // perform action: add, just count, add if flagged
+          // add = add an atom or entire molecule to my list of atoms
 
-          if (mode == ATOM) atom->avec->create_atom(basistype[m],x);
-          else add_molecule(x);
+          if (action == INSERT) {
+            if (mode == ATOM) atom->avec->create_atom(basistype[m],x);
+            else if (quatone[0] == 0 && quatone[1] == 0 && quatone[2] == 0)
+              add_molecule(x);
+            else add_molecule(x,quatone);
+          } else if (action == COUNT) {
+            if (nlatt == MAXSMALLINT) nlatt_overflow = 1;
+          } else if (action == INSERT_SELECTED && flag[nlatt]) {
+            if (mode == ATOM) atom->avec->create_atom(basistype[m],x);
+            else if (quatone[0] == 0 && quatone[1] == 0 && quatone[2] == 0)
+              add_molecule(x);
+            else add_molecule(x,quatone);
+          }
+
+          nlatt++;
         }
+      }
+    }
+  }
 }
 
 /* ----------------------------------------------------------------------
@@ -858,7 +1029,7 @@ void CreateAtoms::add_molecule(double *center, double *quat_user)
   onemol->quat_external = quat;
 
   // create atoms in molecule with atom ID = 0 and mol ID = 0
-  // reset in caller after all moleclues created by all procs
+  // reset in caller after all molecules created by all procs
   // pass add_molecule_atom an offset of 0 since don't know
   //   max tag of atoms in previous molecules at this point
 

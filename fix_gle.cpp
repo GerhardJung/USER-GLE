@@ -63,12 +63,12 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   
   // read input parameter
 
-  t_start = force->numeric(FLERR,arg[3]);
+  t_start = utils::numeric(FLERR,arg[3],false,lmp);
   t_target = t_start;
   tstyle = CONSTANT;
-  t_stop = force->numeric(FLERR,arg[4]);
+  t_stop = utils::numeric(FLERR,arg[4],false,lmp);
   
-  mem_count = force->numeric(FLERR,arg[6]);
+  mem_count = utils::numeric(FLERR,arg[6],false,lmp);
   mem_file = fopen(arg[5],"r");
   mem_kernel = new double[mem_count];
   read_mem_file();
@@ -77,7 +77,7 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
     mem_kernel[i]*=update->dt;
   }
   
-  seed = force->inumeric(FLERR,arg[7]);
+  seed = utils::inumeric(FLERR,arg[7],false,lmp);
   
   // optional parameter
   int restart = 0;
@@ -110,7 +110,8 @@ FixGLE::FixGLE(LAMMPS *lmp, int narg, char **arg) :
   
   save_position = NULL;
   save_random = NULL;
-  comm->maxexchange_fix += 9*mem_count;
+  //DEPRECATED: Might need to be updated
+  //comm->maxexchange_fix += 9*mem_count;
   grow_arrays(atom->nmax);
   //atom->add_callback(0);
   

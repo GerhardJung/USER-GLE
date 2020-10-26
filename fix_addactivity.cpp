@@ -55,8 +55,8 @@ FixAddActivity::FixAddActivity(LAMMPS *lmp, int narg, char **arg) :
     if (strcmp(arg[iarg+1],"ABP") == 0) {
       if (iarg+4 > narg) error->all(FLERR,"Illegal fix addactivity command");
       style = ABP;
-      Fact = force->numeric(FLERR,arg[iarg+2]);
-      D = force->numeric(FLERR,arg[iarg+3]);
+      Fact = utils::numeric(FLERR,arg[iarg+2],false,lmp);
+      D = utils::numeric(FLERR,arg[iarg+2],false,lmp);
     } else error->all(FLERR,"Illegal fix addactivity command");
     iarg += 4;
   } else error->all(FLERR,"Illegal fix addactivity command");
@@ -64,7 +64,7 @@ FixAddActivity::FixAddActivity(LAMMPS *lmp, int narg, char **arg) :
   // optional args
   
   // seed for random numbers
-  int seed = force->inumeric(FLERR,arg[iarg]);
+  int seed = utils::inumeric(FLERR,arg[iarg],false,lmp);
   iarg++;
 
   nevery = 1;
@@ -82,9 +82,6 @@ FixAddActivity::FixAddActivity(LAMMPS *lmp, int narg, char **arg) :
   random = new RanMars(lmp,seed + comm->me);
   
   memory->create(sforce,maxatom,4,"addactivity:sforce");
-  double Dr = 3.0/4.0*D;
-  printf("%f\n",Dr);
-  Fnoise = sqrt(2.0*Dr/update->dt);
 
 }
 
@@ -134,6 +131,7 @@ void FixAddActivity::post_force(int vflag)
   double **x = atom->x;
   double **f = atom->f;
   double **mu = atom-> mu;
+  double *rad = atom-> radius;
   double **omega = atom->omega;
   int *mask = atom->mask;
   imageint *image = atom->image;
@@ -175,6 +173,9 @@ void FixAddActivity::post_force(int vflag)
   double eta0, eta1, eta2;
   for (int i = 0; i < nlocal; i++) {
     if (mask[i] & groupbit) {
+      //printf("%f\n",rad[i]);
+      double Dr = 3.0/4.0*D*1/(rad[i]*rad[i]);
+      Fnoise = sqrt(2.0*Dr/update->dt);
       //eta0 = Fnoise * random->gaussian();
       //eta1 = Fnoise * random->gaussian();
       //eta2 = Fnoise * random->gaussian();
